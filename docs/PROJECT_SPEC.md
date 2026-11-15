@@ -1,6 +1,6 @@
 # Project Specification — Security Incident Management Platform
 
-Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) implemented and verified locally, **not yet committed**
+Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed
 
 A full-stack application for reporting, triaging and resolving security incidents. It is intended to be employer-ready: working end to end, tested automatically, secure by default, and documented.
 
@@ -166,21 +166,21 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 
 ### Milestone 2 — Incident audit trail
 
-Implemented and verified locally on 2026-11-15. **Not yet committed**; CI confirmation will be recorded here after the push.
+Committed as `7838f9c232170cf8f7a8f592ed1a813d5c702d34` on 2026-11-15. Its CI run [43672248889](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672248889) **failed** in the frontend job: one new test asserted the "Loading history…" state synchronously, and on the CI runner the mocked response arrived first (a timing race in the test, not an application fault; backend, migration and Docker jobs passed). Fixed in `ec3ed2e415f1f5c473f8081e7126d1f060d11327`, which holds mocked responses until each loading state has been asserted, in that test and in two older loading tests with the same latent race. The suite then passed five consecutive local runs, and CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed all four jobs: Backend tests, Migration round trip (including `0003` downgrade and the bootstrap command), Frontend tests and build, and Docker images.
 
 | Functionality | Status | Evidence |
 |---|---|---|
-| `created` event on every incident creation, with the session user as actor and all initial values | **Verified (local)** | `test_audit.py::test_create_records_one_created_event_with_the_session_actor`, `::test_responder_create_with_assignee_records_the_assignee` |
-| Exactly one correctly classified event per update; every changed field kept; no event for no-op updates | **Verified (local)** | `test_audit.py::test_each_update_records_exactly_one_correctly_classified_event` (5 cases), `::test_noop_update_records_nothing_and_does_not_touch_the_row`, `::test_unassign_records_previous_assignee`, `::test_full_description_is_kept_before_and_after` |
-| Actor is whoever made the change; client cannot supply actor or audit values | **Verified (local)** | `test_audit.py::test_actor_is_whoever_made_the_change_not_the_reporter`, `::test_client_cannot_supply_actor_or_audit_values` |
-| Only allowlisted fields recorded; no secrets | **Verified (local)** | `test_audit.py::test_audit_records_only_allowlisted_fields`; database scan during the browser check found no secret-like values or other keys |
-| History visibility per role, including legacy incidents; 401 when signed out | **Verified (local)** | `test_audit.py::test_history_visibility_by_role`; browser check |
-| Pagination and newest-first ordering; emails for assignee changes; no write methods | **Verified (local)** | `test_audit.py::test_history_is_paginated_newest_first_with_actor_and_users`, `::test_history_has_no_write_endpoints` |
-| Atomic writes: a failed event write rolls back the update or creation; a failed incident write rolls back the event | **Verified (local)** | `test_audit.py::test_failed_event_write_rolls_back_the_update`, `::test_failed_event_write_rolls_back_the_creation`, `::test_failed_incident_write_rolls_back_the_event` |
-| Immutability trigger rejects `UPDATE`, `DELETE`, `TRUNCATE`; incident and actor references cannot be deleted | **Verified (local)** | `test_audit.py::test_database_rejects_changes_to_audit_events` (4 cases), `::test_actor_and_incident_references_are_preserved`; `psql` checks on a disposable stack |
-| Concurrent updates serialised by a row lock | **Verified (local)** | `test_audit.py::test_update_locks_the_incident_row` (SQL contains `FOR UPDATE OF incidents`), `::test_concurrent_writers_are_serialised_by_the_row_lock` (two real transactions; the second writer times out waiting) |
-| Migration `0003` upgrade, downgrade to base, re-upgrade; models match migrations | **Verified (local)** | CI-equivalent run on a disposable PostgreSQL |
-| History section: plain-language entries, collapsed description diffs, loading, empty, error with Retry, "Show older", live refresh after edits, safe text rendering | **Verified (local)** | `IncidentHistory.test.tsx` (8 tests); browser check |
+| `created` event on every incident creation, with the session user as actor and all initial values | **Verified** | `test_audit.py::test_create_records_one_created_event_with_the_session_actor`, `::test_responder_create_with_assignee_records_the_assignee` |
+| Exactly one correctly classified event per update; every changed field kept; no event for no-op updates | **Verified** | `test_audit.py::test_each_update_records_exactly_one_correctly_classified_event` (5 cases), `::test_noop_update_records_nothing_and_does_not_touch_the_row`, `::test_unassign_records_previous_assignee`, `::test_full_description_is_kept_before_and_after` |
+| Actor is whoever made the change; client cannot supply actor or audit values | **Verified** | `test_audit.py::test_actor_is_whoever_made_the_change_not_the_reporter`, `::test_client_cannot_supply_actor_or_audit_values` |
+| Only allowlisted fields recorded; no secrets | **Verified** | `test_audit.py::test_audit_records_only_allowlisted_fields`; database scan during the browser check found no secret-like values or other keys |
+| History visibility per role, including legacy incidents; 401 when signed out | **Verified** | `test_audit.py::test_history_visibility_by_role`; browser check |
+| Pagination and newest-first ordering; emails for assignee changes; no write methods | **Verified** | `test_audit.py::test_history_is_paginated_newest_first_with_actor_and_users`, `::test_history_has_no_write_endpoints` |
+| Atomic writes: a failed event write rolls back the update or creation; a failed incident write rolls back the event | **Verified** | `test_audit.py::test_failed_event_write_rolls_back_the_update`, `::test_failed_event_write_rolls_back_the_creation`, `::test_failed_incident_write_rolls_back_the_event` |
+| Immutability trigger rejects `UPDATE`, `DELETE`, `TRUNCATE`; incident and actor references cannot be deleted | **Verified** | `test_audit.py::test_database_rejects_changes_to_audit_events` (4 cases), `::test_actor_and_incident_references_are_preserved`; `psql` checks on a disposable stack |
+| Concurrent updates serialised by a row lock | **Verified** | `test_audit.py::test_update_locks_the_incident_row` (SQL contains `FOR UPDATE OF incidents`), `::test_concurrent_writers_are_serialised_by_the_row_lock` (two real transactions; the second writer times out waiting) |
+| Migration `0003` upgrade, downgrade to base, re-upgrade; models match migrations | **Verified** | CI-equivalent run on a disposable PostgreSQL |
+| History section: plain-language entries, collapsed description diffs, loading, empty, error with Retry, "Show older", live refresh after edits, safe text rendering | **Verified** | `IncidentHistory.test.tsx` (8 tests); browser check |
 
 **Test-quality check:** 11 audit protections were deliberately disabled one at a time (row lock, history visibility, update auditing, creation auditing, commit order, actor source, no-op handling, allowlist guard, classification, before-value timing, ordering). The first run missed one (actor taken from the reporter), because every test's actor was also the reporter; `test_actor_is_whoever_made_the_change_not_the_reporter` was added and now catches it. All 11 are caught.
 
@@ -228,7 +228,7 @@ Committed as `1ae693b52ed41bbcc274df03fcfa8d1ec6a64e22` on 2026-11-15 and verifi
 | Frontend | Incident list with filters and pagination kept in the URL; create form; detail with status change and editing | **Verified** | page tests; manual browser checks |
 | Frontend | Loading, empty, error and success states; API status indicator | **Verified** | page tests; manual check with backend stopped |
 | Frontend | Responsive layout, light/dark themes, keyboard skip link; user-entered HTML rendered as text | **Verified (manual)** | Browser checks, 2026-11-14 and 2026-11-15 |
-| CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | GitHub Actions run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
+| CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | Latest: GitHub Actions run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) on `ec3ed2e` (Milestone 2): all four jobs **success**. Milestone 1: run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
 | Supply chain | Lockfile with `npm ci`; read-only CI token; no repository secrets | **Implemented** | `frontend/package-lock.json`, `ci.yml` |
 
 **Test counts:** 98 backend (pytest), 68 frontend (Vitest + React Testing Library). After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
@@ -260,7 +260,7 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 
 Milestones are delivered in order, each as a small, separately approved change with passing CI. **Each milestone keeps all earlier tests passing and adds tests for its own behaviour.** Milestones 2–4 must apply the same visibility rule as incident endpoints (reporters: own incidents only) and include negative tests for it.
 
-### Milestone 2 — Audit trail · Implemented (pending commit)
+### Milestone 2 — Audit trail · Complete (`7838f9c`, `ec3ed2e`)
 
 Every change to an incident is recorded and cannot be edited.
 
