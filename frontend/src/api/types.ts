@@ -87,6 +87,31 @@ export interface IncidentEvent {
   created_at: string;
 }
 
+export const COMMENT_VISIBILITIES = ['public', 'internal'] as const;
+/** `public`: the reporter and staff can read it. `internal`: responders and admins only. */
+export type CommentVisibility = (typeof COMMENT_VISIBILITIES)[number];
+
+export interface IncidentComment {
+  id: number;
+  visibility: CommentVisibility;
+  body: string;
+  author: UserSummary;
+  created_at: string;
+}
+
+export interface CommentPage {
+  items: IncidentComment[];
+  /** Only the comments the signed-in user may read. */
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CommentCreate {
+  body: string;
+  visibility: CommentVisibility;
+}
+
 export interface IncidentEventPage {
   items: IncidentEvent[];
   total: number;
@@ -139,6 +164,8 @@ export interface IncidentListParams {
 }
 
 export const TITLE_MAX_LENGTH = 200;
+/** Matches the API and the database (migration 0006); counted in Unicode code points. */
+export const COMMENT_MAX_LENGTH = 5000;
 export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_LENGTH = 128;
 export const MAX_PAGE_SIZE = 100;

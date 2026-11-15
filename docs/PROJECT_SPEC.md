@@ -1,6 +1,6 @@
 # Project Specification — Security Incident Management Platform
 
-Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed · Milestone 4 (secure CSV export) complete — commit `02eba64`, CI run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) passed · Milestone 5 (end-to-end tests) complete — commits `13d3c34`, `7e65e81`, `dea4ba7`, CI run [43726750357](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43726750357) passed (all five jobs) · Roadmap expanded on 2026-11-15 (Milestones 5, 5A, 5B, 5C, 6 and a final presentation, all **Planned**)
+Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed · Milestone 4 (secure CSV export) complete — commit `02eba64`, CI run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) passed · Milestone 5 (end-to-end tests) complete — commits `13d3c34`, `7e65e81`, `dea4ba7`, CI run [43726750357](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43726750357) passed (all five jobs) · Milestone 5A (comments and internal notes) implemented and verified locally, **not yet committed** · Roadmap expanded on 2026-11-15 (Milestones 5, 5A, 5B, 5C, 6 and a final presentation, all **Planned**)
 
 A full-stack application for reporting, triaging and resolving security incidents. It is intended to be employer-ready: working end to end, tested automatically, secure by default, and documented.
 
@@ -74,6 +74,11 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 | Create users, change roles, deactivate | ✗ (403) | ✗ (403) | ✓ (not on themselves) |
 | Change own password | ✓ | ✓ | ✓ |
 | View incident history | Own incidents only | All | All |
+| Read public comments | Own incidents only | All, including legacy | All, including legacy |
+| Read internal notes | ✗ (never returned or counted) | All | All |
+| Post public comments | Own incidents only | All | All |
+| Post internal notes | ✗ (403) | All | All |
+| Edit or delete comments | ✗ (no endpoint) | ✗ (no endpoint) | ✗ (no endpoint) |
 
 - Incidents a reporter may not see return **404**, identical to a missing incident, so their existence is not revealed.
 - Ownership (`reporter_id`) is always taken from the session; a client-supplied `reporter_id` is rejected (422).
@@ -144,6 +149,25 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 
 **Benchmark (50,000 incidents, 225,547 events; staff unless noted):** High+Open 3,104 rows in 108 ms; 22,315 rows in 668 ms; all 50,000 rows in 1,584 ms (the last two above the limit, benchmark only); one reporter's 263 rows in 21 ms. About 32 µs per row, so a 10,000-row export takes roughly 0.3 s (interpolated, not measured at exactly 10,000). The count uses the existing `ix_incidents_status_severity` (3.2 ms); reporter exports use `ix_incidents_reporter_id`. **No new index was needed.**
 
+### Comments and internal notes design (Milestone 5A)
+
+`GET` and `POST /incidents/{incident_id}/comments` (`backend/app/comments.py`). Approved decisions D1–D11 (2026-11-15).
+
+| Topic | Decision | Notes and limits |
+|---|---|---|
+| Incident authorization | Both endpoints call the existing `_get_visible` **first**, so a reporter gets the same 404 body for someone else's incident, a legacy incident or a missing one, whatever they send (including a request for an internal note). | Tested for GET and POST, with paging parameters, in the API and end to end. |
+| Separation | `_comments_visible_to` adds `visibility = 'public'` for reporters **inside the SQL**, for both the rows and `total`, so the count never reveals internal notes. Responders and admins read both kinds. A reporter posting `internal` gets **403** ("Reporters can only post public comments."), after the visibility check. | `visibility` is required and has no default in the API or the database. |
+| Fail closed | Before a reporter's list response is built, any non-public row raises a 500 (logged with the user ID only, never the body) instead of being sent. | Proven by a test that disables the SQL filter. |
+| Other paths | Incident detail and list, history (`incident_events`), analytics, CSV export and `/auth/me` never read comments. Adding a comment **does not touch the incident row**, so `updated_at` cannot reveal internal activity. | A canary test checks every reporter-readable endpoint and error response; analytics and export output are byte-identical before and after comments are added; the incident row's physical version (`ctid`) is unchanged. |
+| Audit record (D2) | The append-only `incident_comments` row is the comment's audit record: author (from the session), visibility, body and database time. Comment activity is **not** written to `incident_events`, so the history endpoint is unchanged. | No `incident_event_action` enum change, which keeps migration `0006` cleanly reversible. |
+| Immutability (D1) | No edit or delete endpoints (405). A trigger rejects `UPDATE`, `DELETE` and `TRUNCATE`; both foreign keys are `RESTRICT`. | Same owner-can-disable limit as the other append-only tables (ISSUE-12). Content published by mistake cannot be removed through the app: ISSUE-18, a production-readiness blocker. |
+| Body rules (D5) | Line endings become LF; a fixed set of blank characters is trimmed from both ends (space, tab, LF, U+00A0, U+1680, U+2000–U+200B, U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF); then 1–**5,000** code points; no C0 controls other than tab and LF, no DEL or C1 controls (U+007F–U+009F), no NUL and no lone surrogates. | Length counts Unicode code points (an emoji counts once), as PostgreSQL's `char_length` does. A raw input above 20,000 characters is refused before processing. |
+| API and database agree | The same rules are three check constraints (`ck_incident_comments_body_length`, `_chars`, `_trimmed`). Tests insert 40 edge-case bodies directly and evaluate about 50,000 generated bodies (every code point up to U+30FF and U+FE00–U+FF0F, alone, leading, trailing and inside text) against the live constraint definitions: PostgreSQL accepts **exactly** the bodies the API would store unchanged. | NUL and lone surrogates cannot reach PostgreSQL text at all; the API returns 422 for both (not 500). |
+| Ordering and paging (D4) | Oldest first by (`created_at`, `id`); `limit` 1–100 (default 50), `offset` ≥ 0. Because comments are append-only, earlier pages never shift; the UI still removes duplicates by ID. | — |
+| Rendering | Bodies are React text with `white-space: pre-wrap`: no HTML, Markdown or automatic links. | Verified with HTML/JavaScript payloads in unit and end-to-end tests. |
+| Frontend | "Discussion" section on the detail page above History. Internal notes carry the text "Internal note" and "Not visible to the reporter" and a tinted border (`--internal` tone, contrast-checked on that background). Staff choose visibility with a labelled radio group that **defaults to Internal note** (D3); the submit button names the choice ("Add internal note" / "Post public reply") and a public reply shows "The reporter will see this reply." (linked to the textarea). Reporters have no visibility control. Character counter in code points, a polite announcement only near the limit, field errors linked with `aria-describedby`, "Comment posted." / "Internal note added." announced, focus returned to the textarea. | A "Reporter" badge is derived in the browser from the incident's reporter (D8); no role data is added to the API. |
+| Out of scope | No visibility filter parameter (D9); comments are not in the CSV export or dashboard (D10); no rate limit on posting (D11, ISSUE-19); comments are allowed on every status (D6). | — |
+
 ### Data model
 
 **`users`** (migration `0002`)
@@ -187,6 +211,19 @@ Indexes: `ix_incidents_status_severity`, `ix_incidents_reporter_id`, `ix_inciden
 
 **`incident_exports`** (migration `0005`): append-only record of CSV export requests: `id`, `actor_id` (FK → `users`, `RESTRICT`), `outcome` (enum `export_outcome`: `initiated`, `rejected`), `filters` (JSONB `{severity, status}`), `row_count`, `row_limit`, `created_at`. Index `ix_incident_exports_actor_id_created_at`. A trigger rejects `UPDATE`, `DELETE`, `TRUNCATE`.
 
+**`incident_comments`** (migration `0006`): append-only discussion entries.
+
+| Column | Type | Rules |
+|---|---|---|
+| `id` | integer, primary key | ordering tie-breaker |
+| `incident_id` | integer, FK → `incidents` (`RESTRICT`) | |
+| `author_id` | integer, FK → `users` (`RESTRICT`), not null | the signed-in user; never client input |
+| `visibility` | enum `comment_visibility` | `public`, `internal`; **no default** |
+| `body` | text | check constraints: 1–5,000 characters, no forbidden control characters, no leading or trailing blank characters (see *Comments and internal notes design*) |
+| `created_at` | timestamptz | set by the database at insert |
+
+Indexes `ix_incident_comments_incident_id_visibility_id (incident_id, visibility, id)` and `ix_incident_comments_author_id`. A trigger rejects `UPDATE`, `DELETE`, `TRUNCATE`. There is no `updated_at`: comments never change.
+
 Indexes: `ix_incident_events_incident_id_id (incident_id, id)`, `ix_incident_events_actor_id`, and the partial `ix_incident_events_first_resolution (incident_id, created_at) WHERE status moved to resolved/closed` (migration `0004`).
 
 **Legacy data strategy (migration `0002`).** Every existing incident is preserved. Incidents created before accounts existed keep `reporter_id = NULL` and are visible to responders and admins only. Existing `assignee_id` values are set to `NULL`, because no users existed before this migration, so they could not refer to anyone; this step is not reversed by a downgrade. The downgrade otherwise removes the users and sessions tables, the ownership column, both foreign keys and the `user_role` type.
@@ -207,6 +244,8 @@ All `/incidents` and `/users` endpoints require a session (**401** otherwise). S
 | `GET` | `/incidents/{id}` | Any role | 404 if missing **or not visible** |
 | `PATCH` | `/incidents/{id}` | Any role | Partial update. Reporters: own incidents, no `status`/`assignee_id` (403). Only `assignee_id` may be `null`. |
 | `GET` | `/incidents/{id}/events` | Any role (visibility applies) | Audit history newest first. `limit` 1–100 (default 20), `offset` ≥ 0. Returns `{items, total, limit, offset, users}`; each item is `{id, action, changes, actor: {id, email}, created_at}`. 404 when the incident is missing or not visible. No write methods (405). |
+| `GET` | `/incidents/{id}/comments` | Any role (visibility applies) | Discussion oldest first. `limit` 1–100 (default 50), `offset` ≥ 0. Returns `{items, total, limit, offset}`; each item is `{id, visibility, body, author: {id, email}, created_at}`. Reporters receive, and `total` counts, public comments only. 404 when the incident is missing or not visible. |
+| `POST` | `/incidents/{id}/comments` | Any role (visibility applies) | Body `{body, visibility}`, both required; unknown fields (such as `author_id`) 422. Reporters: `public` only (403 for `internal`). Body rules in *Comments and internal notes design*. 201 with the comment. No edit or delete routes (405). |
 | `GET` | `/exports/incidents.csv` | Any role (visibility applies) | Optional `severity`, `status`. Streams the CSV described in *CSV export design*. 413 above `EXPORT_MAX_ROWS` (default 10,000) with `X-Export-Row-Count`; 422 for invalid filters. Each request is recorded in `incident_exports`. Read-only (405 for writes). |
 | `GET` | `/analytics/summary` | Any role (visibility applies) | `from`, `to` (inclusive dates), `tz` (IANA). Returns `{scope, range, totals, by_status, by_severity, open_backlog_by_severity, trend, resolution}`; see *Analytics design*. 422 for invalid ranges or time zones. Read-only (405 for writes). |
 | `GET` | `/users/assignees` | Responder, admin | Active responders and admins as `{id, email}` |
@@ -219,6 +258,57 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 ---
 
 ## Completed functionality
+
+### Milestone 5A — Incident comments and internal notes
+
+Implemented and verified locally on 2026-11-15. **Not yet committed**; CI confirmation will be recorded here after the push. Design: *Comments and internal notes design*; data model: `incident_comments`.
+
+| Functionality | Status | Evidence |
+|---|---|---|
+| Reporters read and post public comments on their own incidents only; responders and admins read and post both kinds on every incident, including legacy ones | **Verified (local)** | `backend/tests/test_comments.py` (role tests); `e2e/tests/comments.spec.ts` (conversation test) |
+| Internal notes and their count never reach a reporter: comment list and every page, incident detail and list, history, analytics, CSV export, `/auth/me` and error responses | **Verified (local)** | canary and paging tests in `test_comments.py`; end-to-end API, UI, dashboard and CSV checks |
+| Identical 404 for another reporter's, a legacy and a missing incident on GET and POST (including a request for an internal note); reporter internal posting refused with 403 | **Verified (local)** | `test_comments.py`; `comments.spec.ts` (UI and API) |
+| Author from the session only (`author_id`, `created_at`, `id`, `incident_id` refused); `visibility` required; CSRF required on POST (route inventory updated) | **Verified (local)** | `test_comments.py`; `test_auth.py` CSRF inventory and per-route test |
+| Append-only: no edit or delete routes; trigger blocks UPDATE, DELETE, TRUNCATE; references RESTRICT; no default visibility | **Verified (local)** | `test_comments.py` |
+| Adding comments leaves the incident row (including `updated_at`) and `incident_events` untouched; analytics and export output unchanged | **Verified (local)** | `test_comments.py` |
+| Body rules identical in the API and PostgreSQL, including Unicode, NUL, control characters, lone surrogates and length in code points | **Verified (local)** | `test_comments.py` (agreement tests: 40 direct inserts and about 50,000 generated bodies) |
+| Oldest-first ordering with ID tie-breaker, stable paging, parameter validation | **Verified (local)** | `test_comments.py` |
+| Fail-closed response check | **Verified (local)** | `test_comments.py::test_a_regressed_query_fails_closed_instead_of_leaking` |
+| Discussion UI: plain-text bodies, internal-note marking in text, staff default Internal note, named submit button, public-reply warning, reporter has no visibility choice, validation and counter matching the server, announcements, focus, loading, empty, error and Retry, "Show more comments" without duplicates | **Verified (local)** | `frontend/src/components/IncidentDiscussion.test.tsx` (17 tests); `frontend/src/validation.test.ts` (5 comment tests) |
+| Discussion end to end: conversation between roles, keyboard visibility choice, HTML as text, API refusals | **Verified (local)** | `e2e/tests/comments.spec.ts` (5 tests) |
+| Accessibility: axe WCAG 2.1 A/AA scan of the discussion (staff view with an internal note, public-reply warning and a field error; reporter view) in light and dark themes; long unbroken comment text fits at 390 px | **Verified (local)** | `e2e/tests/accessibility.spec.ts` (2 new tests, phone-width test extended) |
+| Migration `0006` upgrade, downgrade and re-upgrade; `alembic check` | **Verified (local)** | see *Migration* below |
+
+**Results (local, 2026-11-15):** backend **269 passed** (165 before; 104 new) on a disposable PostgreSQL 17 in the CI-equivalent sequence; frontend **113 passed** (91 before; 22 new), type check and production build clean; end-to-end **45 tests** (38 before; 7 new): **three consecutive runs, 45/45 each**, on freshly built disposable stacks (about 1.6 minutes of test time; 194–199 s per run including build and teardown). The Docker volume list was identical before and after the runs. Two earlier full runs during development failed on test mistakes (a substring label match, an AxeBuilder page created with `browser.newPage()`, a 405 probe not allowed by the console guard) and on the contrast defect below; all were corrected before the three recorded runs.
+
+**Migration:** on a disposable database: upgrade `0001`→`0006`; `alembic check` reported no differences; downgrade to base left no application tables or enum types; re-upgrade and `alembic check` clean again. Separately, with a comment row present, downgrading to `0005` removed the table, the `comment_visibility` type and the trigger function while incidents and the `0005` export triggers remained; upgrading again recreated `0006` and `alembic check` was clean.
+
+**Deliberate-break checks** (scratch copies only; each removed exactly one protection):
+
+| Protection removed | Caught by |
+|---|---|
+| Reporter visibility filter (rows and total) | 2 backend tests (fail-closed check turned the leak into a 500); end to end: 2 tests (with the fail-closed check also removed) |
+| Reporter filter and fail-closed check together | 3 backend tests |
+| Filter on the reporter's `total` only (internal-note count) | 1 backend test |
+| 403 for reporter internal notes (unauthorized posting) | 2 backend tests |
+| Incident authorization (`_get_visible` replaced by a plain lookup) | 1 backend test; end to end (visibility rule removed): 2 tests |
+| Visibility checked after the internal-note 403 (existence leak) | 1 backend test |
+| Unknown request fields ignored instead of refused (author spoofing) | 1 backend test |
+| API blank set missing U+3000 (API and database disagree) | 4 backend tests |
+| NUL not rejected by the API | 5 backend tests |
+| Incident `updated_at` set when commenting; incident row rewritten without value changes | 1 backend test each (the first version of this test missed both because tests share one transaction; it now backdates the row and compares its `ctid`) |
+| Comment body rendered as HTML | 1 frontend test; 1 end-to-end test |
+| Staff default visibility public; reporter offered the visibility choice; "Not visible to the reporter" removed; public-reply warning removed; client validation removed | 5, 1, 2, 1 and 1 frontend tests |
+
+All 18 variants were caught.
+
+**Defects found and fixed during implementation (new code, before any commit):**
+- **Focus:** after posting, focus was meant to return to the textarea but stayed on the button, because the textarea was still disabled when focus was requested. Focus now moves after the re-enabled textarea renders (frontend test).
+- **Contrast (WCAG 1.4.3):** axe found the light-theme "Internal note" badge at 3.9:1 (amber `#a16207` on its tint over the note's own tinted background). A dedicated `--internal` tone (`#92400e` light, 5.4:1; `#fcd34d` dark, 7.9:1) replaced it.
+
+**Existing defect confirmed (not fixed; reported separately as BUG-2):** a NUL character in an incident title or description returns HTTP 500 (see *Known issues*).
+
+**Security review of changed files:** no credentials, tokens or real personal data (synthetic `example.com` users and canary strings only); no generated artifacts (test results, reports, builds, `node_modules`) in the change set; no changes outside the milestone apart from the CSRF route inventory and test helpers. No new dependencies; `pip-audit` (backend) found no known vulnerabilities; `npm audit` found 0 for `frontend` and `e2e`. Backend and frontend Docker images build.
 
 ### Milestone 5 — Permanent Playwright end-to-end tests
 
@@ -375,7 +465,7 @@ Committed as `1ae693b52ed41bbcc274df03fcfa8d1ec6a64e22` on 2026-11-15 and verifi
 | CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | Latest: GitHub Actions run [43726750357](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43726750357) on `dea4ba7` (Milestone 5): all **five** jobs **success**, including End-to-end tests (38 passed). Milestone 4: run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) on `02eba64`: all four jobs **success**. Milestone 3: run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) on `7240e3a`: all four jobs **success**. Milestone 2: run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) on `ec3ed2e`: all four jobs **success**. Milestone 1: run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
 | Supply chain | Lockfile with `npm ci`; read-only CI token; no repository secrets | **Implemented** | `frontend/package-lock.json`, `ci.yml` |
 
-**Test counts:** 165 backend (pytest), 91 frontend (Vitest + React Testing Library), 38 end-to-end (Playwright). After Milestone 3: 122 and 78. After Milestone 2: 98 and 68. After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
+**Test counts:** 269 backend (pytest), 113 frontend (Vitest + React Testing Library), 45 end-to-end (Playwright), including Milestone 5A (verified locally, not yet committed). After Milestone 5: 165, 91 and 38. After Milestone 3: 122 and 78. After Milestone 2: 98 and 68. After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
 
 The manual browser checks were one-off Playwright scripts, not part of the repository or CI. Milestone 5 makes them permanent.
 
@@ -386,6 +476,7 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 | ID | Issue | Impact | Resolution |
 |---|---|---|---|
 | ~~BUG-1~~ | ~~`assignee_id` above 2147483647 returned HTTP 500 instead of 422.~~ | — | **Fixed in Milestone 1** (`le=2147483647` on create and update schemas; regression tests). |
+| BUG-2 | A NUL character (`\u0000` in JSON) in an incident `title` or `description` returns **HTTP 500**: PostgreSQL text cannot store NUL (`DataError` on create), and on update the audit diff also fails (`UntranslatableCharacter` in JSONB). Reproduced on `2ab695c` in a disposable environment on 2026-11-15 (create title, create description, update description). | An unhandled server error instead of a 422; nothing is stored. | Not fixed in Milestone 5A (scope). Proposed: reject NUL and other control characters in incident text with a 422, as comments already do, in a separately approved change. |
 | ~~ISSUE-2~~ | ~~No authentication or authorization.~~ | — | **Resolved in Milestone 1.** |
 | ISSUE-3 | `StarletteDeprecationWarning`: using `httpx` with `starlette.testclient` is deprecated in favour of `httpx2`. | Test warning only. | Milestone 6 dependency review. |
 | ISSUE-4 | `/health/db` creates a new engine per request and duplicates a fallback database URL. | Inefficient; hardcoded fallback credential string. | Milestone 6. |
@@ -402,6 +493,8 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 | ISSUE-15 | CSV formula-injection defence has spreadsheet-specific limits: the leading apostrophe is hidden by Excel but may appear as a visible character in other tools (some LibreOffice and Google Sheets import paths, text editors); it protects the exported file only, not data copied out of it or re-saved without the prefix; and it targets the OWASP trigger set (`= + - @`, tab, CR, LF and their full-width forms, also after leading whitespace). | A spreadsheet user could still be tricked if they remove the apostrophe or paste the cell elsewhere. | Document for users in Milestone 6; revisit if a target application with other triggers is adopted. |
 | ISSUE-16 | CSV exports are capped per request (10,000 rows) and every request is recorded, but there is no per-user rate limit, alerting, or screen for reviewing `incident_exports`. | Repeated exports are detectable only by querying the database. | Milestone 6: export rate limiting and an admin view or alert for unusual export volume. |
 | ISSUE-17 | The end-to-end suite runs in Chromium only, against the Vite development server, and does not cover API-unavailable states or exact theme colours (covered by frontend unit tests and screenshots instead). | Browser-specific or production-build regressions would not be caught end to end. | Milestone 6: run the suite against the production frontend image; consider Firefox and WebKit projects. |
+| ISSUE-18 | Comments are append-only with no redaction: a sensitive comment published by mistake (including a staff reply posted as public instead of internal) cannot be removed or hidden through the application; only a database owner could, by disabling the trigger. | **Production-readiness blocker for use with real user data.** Mitigated for now by the internal default, the named submit button and the public-reply warning. | Milestone 6: administrative redaction that keeps an immutable record of who redacted what, when and why, hides the content from every reader, and is covered by visibility tests. |
+| ISSUE-19 | Comment posting is not rate limited, and comment IDs come from one sequence shared by public and internal comments, so a reporter could infer that other comments were created between two of theirs (not which incident, author or content). | Spam or flooding by an authenticated user; minor activity side channel. | Milestone 6: per-user rate limiting with the shared limiter (ISSUE-7); revisit IDs if the side channel matters for deployment. |
 
 ---
 
@@ -415,7 +508,7 @@ Milestones are delivered in order, each as a small, separately approved change w
 |---|---|---|
 | 1–4 | Authentication/RBAC, audit trail, analytics dashboard, secure CSV export | **Complete** (see *Completed functionality*) |
 | 5 | Permanent Playwright end-to-end tests in GitHub Actions | **Complete** (`13d3c34`, `7e65e81`, `dea4ba7`) |
-| 5A | Incident comments and internal-only responder notes | Planned |
+| 5A | Incident comments and internal-only responder notes | Implemented, verified locally (pending commit and CI) |
 | 5B | SLA tracking, response/resolution deadlines, overdue indicators and escalation | Planned |
 | 5C | AI-assisted incident triage with human approval | Planned |
 | 6 | Production hardening, observability, monitoring and deployment | Planned |
@@ -483,22 +576,18 @@ Turn the manual browser verification into a permanent, automated suite. Plan app
 - [x] Includes mobile-viewport checks for no horizontal scrolling, and a basic automated accessibility scan of the main pages.
 - [x] Reliable: no fixed sleeps; passes repeatedly in CI. (Four consecutive full local runs passed; CI run 43726750357 passed. One CI timing failure, run 43724759395, was fixed in `dea4ba7`; keep watching for recurrence.)
 
-### Milestone 5A — Incident comments and internal-only responder notes · Planned
+### Milestone 5A — Incident comments and internal-only responder notes · Implemented (pending commit)
 
 Discussion on an incident: public comments that the reporter can see, and internal notes visible only to responders and admins.
 
-**Anticipated technical additions (not implemented)**
-- `incident_comments` table (migration): incident, author (from the session), body (length-limited text), visibility `public` or `internal`, timestamps; edit and delete policy decided in the plan (for example, edits recorded rather than overwritten).
-- Endpoints such as `GET/POST /incidents/{id}/comments`, filtered by role in the query itself.
-- Comment activity recorded in the audit trail (new event actions or a linked record) with the authenticated actor.
-- Detail-page "Discussion" section, with internal notes visibly marked for staff.
+**Approved decisions (2026-11-15):** append-only comments with no edit or delete (D1); the `incident_comments` row is the audit record, separate from `incident_events` (D2); staff default to internal notes (D3); oldest first, 50 per page (D4); 5,000-character limit enforced identically by the API and PostgreSQL (D5); comments allowed on every status (D6); the incident's `updated_at` is unchanged by comments (D7); a browser-derived "Reporter" badge only (D8); no visibility filter (D9); no comments in the export or dashboard (D10); rate limiting deferred (D11). Implemented as described in *Comments and internal notes design*.
 
 **Acceptance criteria**
-- [ ] Reporters can read and add public comments on their own incidents only; responders and admins can read and add both kinds on any incident.
-- [ ] Internal notes never reach a reporter through any path: comment list, incident detail, history, analytics, CSV export or error messages (negative tests per path, including end-to-end).
-- [ ] Author identity always from the session; bodies rendered as text; size limits enforced; CSRF on writes.
-- [ ] Comment creation (and any edit or delete allowed by the approved policy) is auditable with actor and time.
-- [ ] Backend, frontend and end-to-end tests, including cross-reporter isolation and deliberate-break checks.
+- [x] Reporters can read and add public comments on their own incidents only; responders and admins can read and add both kinds on any incident. *(Verified locally; CI pending.)*
+- [x] Internal notes never reach a reporter through any path: comment list, incident detail, history, analytics, CSV export or error messages (negative tests per path, including end-to-end). *(Verified locally, including counts and `/auth/me`; CI pending.)*
+- [x] Author identity always from the session; bodies rendered as text; size limits enforced; CSRF on writes. *(Verified locally; CI pending.)*
+- [x] Comment creation (and any edit or delete allowed by the approved policy) is auditable with actor and time. *(Append-only rows; no edit or delete exists. Verified locally; CI pending.)*
+- [x] Backend, frontend and end-to-end tests, including cross-reporter isolation and deliberate-break checks. *(18 of 18 variants caught. Verified locally; CI pending.)*
 
 ### Milestone 5B — SLA tracking, deadlines, overdue indicators and escalation · Planned
 
@@ -546,6 +635,7 @@ The original hardening and deployment criteria below are unchanged; observabilit
 - [ ] Security headers (Content-Security-Policy, HSTS when on HTTPS, `X-Content-Type-Options`, frame protections); CORS locked down; request size limits.
 - [ ] Configuration only through environment variables, with a documented `.env.example`; no default credentials in production paths (resolves ISSUE-4).
 - [ ] Shared, restart-safe login rate limiting with correct client IPs behind the proxy (ISSUE-7); expired-session cleanup (ISSUE-9); HTTPS-only cookies (ISSUE-11).
+- [ ] **Production-readiness blocker:** administrative redaction of accidentally published sensitive comments, with an immutable redaction record and visibility tests (ISSUE-18); per-user rate limiting of comment posting (ISSUE-19).
 - [ ] Least-privilege database role for the app (no ownership; `INSERT`/`SELECT` only on `incident_events`) (ISSUE-12); automatic unassignment on demotion or deactivation, recorded in the audit trail (ISSUE-10).
 - [ ] Structured logging without secrets or personal data; consistent error responses.
 - [ ] Dependency review and CI dependency/vulnerability scanning; resolve ISSUE-3.

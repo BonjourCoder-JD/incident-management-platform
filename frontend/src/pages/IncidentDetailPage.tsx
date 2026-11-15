@@ -3,6 +3,7 @@ import { ApiError, getIncident, updateIncident, type FieldErrors } from '../api/
 import { STATUSES, type Incident, type IncidentStatus, type IncidentUpdate, type Severity } from '../api/types';
 import { permissions, useCurrentUser } from '../auth';
 import { IncidentFields } from '../components/IncidentFields';
+import { IncidentDiscussion } from '../components/IncidentDiscussion';
 import { IncidentHistory } from '../components/IncidentHistory';
 import { useAssignees } from '../components/useAssignees';
 import { Alert, Email, EmptyState, LoadingState, SeverityBadge, StatusBadge } from '../components/ui';
@@ -205,6 +206,7 @@ export function IncidentDetailPage({ id }: { id: number }) {
               </>
             )}
           </div>
+          <IncidentDiscussion incident={incident} />
           <IncidentHistory incidentId={incident.id} refreshKey={historyKey} />
         </div>
 

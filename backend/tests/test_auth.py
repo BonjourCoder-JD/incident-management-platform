@@ -171,6 +171,7 @@ def test_csrf_route_inventory_is_complete():
     assert set(_state_changing_routes()) == {
         ("POST", "/auth/logout"), ("PUT", "/auth/password"),
         ("POST", "/incidents"), ("PATCH", "/incidents/{incident_id}"),
+        ("POST", "/incidents/{incident_id}/comments"),
         ("POST", "/users"), ("PATCH", "/users/{user_id}"),
     }
 

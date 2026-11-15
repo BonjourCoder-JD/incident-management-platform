@@ -1,7 +1,8 @@
+import re
 from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Any, Literal
-from .models import IncidentEventAction, IncidentStatus, Severity, UserRole
+from .models import CommentVisibility, IncidentEventAction, IncidentStatus, Severity, UserRole
 from .security import EMAIL_MAX_LENGTH, PASSWORD_MAX_LENGTH, is_valid_email, normalize_email, password_problem
 
 # PostgreSQL INTEGER upper bound. Larger IDs must fail validation (422), not reach the database (BUG-1).
@@ -135,6 +136,64 @@ class IncidentEventPage(BaseModel):
     offset: int
     # People referenced by assignee changes on this page, so the client can show emails.
     users: list[UserSummary]
+
+
+# ---- Comments ----------------------------------------------------------------------
+# These rules are enforced identically by PostgreSQL check constraints (migration 0006);
+# tests/test_comments.py checks that the API and the database accept and reject the same bodies.
+# Lengths count Unicode code points, as PostgreSQL's char_length does in a UTF-8 database.
+
+COMMENT_MAX_LENGTH = 5000
+# Upper bound on the raw input before line endings are normalised and the ends trimmed.
+COMMENT_RAW_MAX_LENGTH = 4 * COMMENT_MAX_LENGTH
+# Trimmed from both ends: Unicode White_Space (other than the control characters refused below),
+# plus zero-width space and the byte-order mark, so a comment can never be blank or invisible.
+COMMENT_BLANK_CHARS = " \t\n\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u200b\u2028\u2029\u202f\u205f\u3000\ufeff"
+# C0 controls except tab and line feed, DEL and C1 controls, and lone UTF-16 surrogates
+# (which PostgreSQL cannot store). NUL is included: PostgreSQL text cannot hold it.
+_COMMENT_FORBIDDEN = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\ud800-\udfff]")
+COMMENT_TOO_LONG = f"Comments can be at most {COMMENT_MAX_LENGTH:,} characters."
+
+
+def clean_comment_body(value: str) -> str:
+    """Normalises line endings to LF, trims blank characters and enforces the comment rules."""
+    if len(value) > COMMENT_RAW_MAX_LENGTH:
+        raise ValueError(COMMENT_TOO_LONG)
+    value = value.replace("\r\n", "\n").replace("\r", "\n").strip(COMMENT_BLANK_CHARS)
+    if not value:
+        raise ValueError("Enter a comment.")
+    if _COMMENT_FORBIDDEN.search(value):
+        raise ValueError("Comments cannot contain control characters.")
+    if len(value) > COMMENT_MAX_LENGTH:
+        raise ValueError(COMMENT_TOO_LONG)
+    return value
+
+
+class CommentCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    body: str
+    # Required, with no default: the client must always say who may read the comment.
+    visibility: CommentVisibility
+
+    @field_validator("body")
+    @classmethod
+    def check_body(cls, value: str) -> str:
+        return clean_comment_body(value)
+
+class CommentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    visibility: CommentVisibility
+    body: str
+    author: UserSummary
+    created_at: datetime
+
+class CommentPage(BaseModel):
+    items: list[CommentRead]
+    # Counts only the comments this user may read.
+    total: int
+    limit: int
+    offset: int
 
 
 # ---- Analytics -----------------------------------------------------------------------

@@ -31,6 +31,7 @@
   --st-investigating: #c084fc;
   --st-resolved: #34d399;
   --st-closed: #9ca3af;
+  --internal: #fcd34d; /* internal notes: 7.9:1 on the badge tint over the note background */
 
   font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.5;
@@ -70,6 +71,7 @@
     --st-investigating: #7e22ce;
     --st-resolved: #047857;
     --st-closed: #4b5563;
+    --internal: #92400e; /* 5.4:1 on the badge tint over the note background (#a16207 was 3.9:1) */
   }
 }
 
@@ -244,6 +246,26 @@ input[aria-invalid='true'], select[aria-invalid='true'], textarea[aria-invalid='
 .history-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16rem; overflow: auto; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.65rem; font-size: 0.875rem; }
 .history-empty { display: grid; gap: 0.25rem; }
 .history-more { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding-top: 0.75rem; }
+
+/* Discussion: internal notes use the --internal tone, contrast-checked on their own tinted background,
+   and always carry the text "Internal note" and "Not visible to the reporter", never colour alone. */
+.discussion { display: grid; gap: 0.9rem; }
+.discussion-intro, .discussion-empty { margin: 0; }
+.comment-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+.comment { --tone: var(--border-strong); border: 1px solid var(--border); border-left: 4px solid var(--tone); border-radius: 8px; padding: 0.7rem 0.85rem; display: grid; gap: 0.35rem; min-width: 0; }
+.comment-internal { --tone: var(--internal); background: color-mix(in srgb, var(--internal) 7%, var(--surface)); }
+.comment-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.6rem; }
+.comment-author { font-weight: 600; overflow-wrap: anywhere; }
+.comment-internal-badge { --tone: var(--internal); }
+.comment-internal-hint { margin: 0; font-weight: 600; }
+.comment-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.comment-form { gap: 0.85rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+.comment-form-heading { margin: 0; font-size: 1rem; }
+.comment-visibility { border: 0; margin: 0; padding: 0; display: grid; gap: 0.4rem; min-width: 0; }
+.comment-visibility legend { font-size: 0.875rem; font-weight: 600; padding: 0; margin-bottom: 0.35rem; }
+.comment-visibility-option { display: flex; align-items: flex-start; gap: 0.5rem; cursor: pointer; }
+.comment-visibility-option input { width: auto; padding: 0; margin-top: 0.3rem; accent-color: var(--accent); }
+.comment-public-warning { color: var(--text); font-weight: 600; }
 
 /* Dashboard */
 .dashboard-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.75rem 1.25rem; margin-bottom: 1.25rem; }

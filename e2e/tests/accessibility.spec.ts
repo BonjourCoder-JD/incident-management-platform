@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
-import { bootstrapAdmin, createIncident, expect, hasNoHorizontalScroll, signIn, test } from '../support/fixtures';
+import { bootstrapAdmin, createIncident, expect, hasNoHorizontalScroll, pageApi, signIn, signOut, test } from '../support/fixtures';
 
 const BLOCKING = new Set(['serious', 'critical']);
 
@@ -42,6 +42,33 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await expectNoBlockingViolations(page, 'create form with errors');
     });
 
+    test('discussion with comments and internal notes, for staff and the reporter', async ({ page, browser, makeUser }) => {
+      const reporter = await makeUser('reporter');
+      await signIn(page, reporter);
+      const id = await seededIncident(page);
+      expect((await pageApi(page, 'POST', `/incidents/${id}/comments`, { body: 'Reporter follow-up question', visibility: 'public' })).status).toBe(201);
+      // AxeBuilder needs a page from a context it can open; browser.newPage() is not supported.
+      const staffContext = await browser.newContext({ colorScheme });
+      const staffPage = await staffContext.newPage();
+      await signIn(staffPage, await makeUser('responder'));
+      for (const visibility of ['public', 'internal']) {
+        expect((await pageApi(staffPage, 'POST', `/incidents/${id}/comments`, { body: `Synthetic ${visibility} entry`, visibility })).status).toBe(201);
+      }
+      await staffPage.goto(`/incidents/${id}`);
+      const staffDiscussion = staffPage.getByRole('region', { name: 'Discussion' });
+      await expect(staffDiscussion.getByText('Not visible to the reporter')).toBeVisible();
+      await staffDiscussion.getByRole('radio', { name: /Public reply/ }).check();
+      await staffDiscussion.getByRole('button', { name: 'Post public reply' }).click(); // empty: shows the field error
+      await expect(staffDiscussion.getByText('Enter a comment.')).toBeVisible();
+      await expectNoBlockingViolations(staffPage, 'discussion (staff)');
+      await staffContext.close();
+
+      await page.goto(`/incidents/${id}`);
+      await expect(page.getByRole('region', { name: 'Discussion' }).getByText('Synthetic public entry')).toBeVisible();
+      await expectNoBlockingViolations(page, 'discussion (reporter)');
+      await signOut(page);
+    });
+
     test('dashboard, users and account pages', async ({ page }) => {
       await signIn(page, bootstrapAdmin());
       await page.goto('/dashboard');
@@ -63,9 +90,11 @@ test.describe('Phone width (390 px)', () => {
   test('main pages fit without horizontal scrolling', async ({ page, makeUser }) => {
     await signIn(page, await makeUser('responder'));
     const id = await seededIncident(page);
+    // Long unbroken text and an internal note must wrap inside the discussion.
+    expect((await pageApi(page, 'POST', `/incidents/${id}/comments`, { body: `See ${'x'.repeat(300)} and https://example.com/${'path/'.repeat(40)}`, visibility: 'internal' })).status).toBe(201);
     const pages: [string, () => Promise<void>][] = [
       ['/', () => expect(page.getByRole('button', { name: /Export CSV/ })).toBeVisible()],
-      [`/incidents/${id}`, () => expect(page.getByRole('region', { name: 'History' }).getByText('reported this incident')).toBeVisible()],
+      [`/incidents/${id}`, () => expect(page.getByRole('region', { name: 'Discussion' }).getByText('Not visible to the reporter')).toBeVisible()],
       ['/incidents/new', () => expect(page.getByLabel('Title')).toBeVisible()],
       ['/dashboard', () => expect(page.locator('.stat-tile').first()).toBeVisible()],
       ['/account', () => expect(page.getByRole('heading', { name: 'Your account' })).toBeVisible()],

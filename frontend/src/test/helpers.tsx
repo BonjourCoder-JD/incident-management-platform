@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react';
 import { vi } from 'vitest';
 import App from '../App';
-import type { Incident, IncidentEventPage, User, UserRole, UserSummary } from '../api/types';
+import type { CommentPage, Incident, IncidentEventPage, User, UserRole, UserSummary } from '../api/types';
 
 export const TEST_CSRF = 'test-csrf-token';
 
@@ -49,6 +49,7 @@ export function jsonResponse(status: number, body: unknown, headers: Record<stri
 type Handler = (url: URL, init: RequestInit) => Response | Promise<Response>;
 
 export const EMPTY_EVENTS: IncidentEventPage = { items: [], total: 0, limit: 10, offset: 0, users: [] };
+export const EMPTY_COMMENTS: CommentPage = { items: [], total: 0, limit: 50, offset: 0 };
 
 interface MockOptions {
   /** Signed-in user; `null` means signed out. Defaults to a responder. */
@@ -56,9 +57,12 @@ interface MockOptions {
   assignees?: UserSummary[];
   /** Incident history responses. Defaults to an empty history. */
   events?: IncidentEventPage | ((url: URL) => Response | Promise<Response>);
+  /** Discussion requests (GET and POST). Defaults to an empty discussion; POST then fails. */
+  comments?: CommentPage | Handler;
 }
 
 const EVENTS_PATH = /^\/api\/incidents\/\d+\/events$/;
+const COMMENTS_PATH = /^\/api\/incidents\/\d+\/comments$/;
 
 /**
  * Replaces global fetch. Health, session (`/auth/me`), logout and the assignee directory
@@ -76,6 +80,11 @@ export function mockApi(handler: Handler = () => jsonResponse(500, {}), options:
       const events = options.events ?? EMPTY_EVENTS;
       return typeof events === 'function' ? events(url) : jsonResponse(200, events);
     }
+    if (COMMENTS_PATH.test(url.pathname)) {
+      const comments = options.comments ?? EMPTY_COMMENTS;
+      if (typeof comments === 'function') return comments(url, init);
+      return (init.method ?? 'GET') === 'GET' ? jsonResponse(200, comments) : jsonResponse(500, {});
+    }
     return handler(url, init);
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -84,11 +93,18 @@ export function mockApi(handler: Handler = () => jsonResponse(500, {}), options:
 
 const PLUMBING = new Set(['/api/health', '/api/auth/me', '/api/users/assignees']);
 
-/** Calls made to the API, excluding health, session, assignee-directory and history requests. */
+/** Calls made to the API, excluding health, session, assignee-directory, history and discussion requests. */
 export function apiCalls(fetchMock: ReturnType<typeof mockApi>) {
   return fetchMock.mock.calls
     .map(([input, init]) => ({ url: new URL(String(input), 'http://localhost'), init: (init ?? {}) as RequestInit }))
-    .filter(call => !PLUMBING.has(call.url.pathname) && !EVENTS_PATH.test(call.url.pathname));
+    .filter(call => !PLUMBING.has(call.url.pathname) && !EVENTS_PATH.test(call.url.pathname) && !COMMENTS_PATH.test(call.url.pathname));
+}
+
+/** Requests made to the discussion endpoint. */
+export function commentCalls(fetchMock: ReturnType<typeof mockApi>) {
+  return fetchMock.mock.calls
+    .map(([input, init]) => ({ url: new URL(String(input), 'http://localhost'), init: (init ?? {}) as RequestInit }))
+    .filter(call => COMMENTS_PATH.test(call.url.pathname));
 }
 
 /** Requests made to the incident history endpoint. */

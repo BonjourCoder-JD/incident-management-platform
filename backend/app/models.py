@@ -29,6 +29,11 @@ class ExportOutcome(str, enum.Enum):
     INITIATED = "initiated"
     REJECTED = "rejected"
 
+class CommentVisibility(str, enum.Enum):
+    # public: the incident's reporter and all staff can read it. internal: responders and admins only.
+    PUBLIC = "public"
+    INTERNAL = "internal"
+
 class IncidentEventAction(str, enum.Enum):
     CREATED = "created"
     UPDATED = "updated"
@@ -139,3 +144,39 @@ class IncidentExport(Base):
     row_count: Mapped[int] = mapped_column(Integer, nullable=False)
     row_limit: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+# PostgreSQL regex bracket contents for the comment body constraints (same text as migration 0006).
+_COMMENT_BLANK_SQL = r" \t\n\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff"
+_COMMENT_FORBIDDEN_SQL = r"\u0001-\u0008\u000b-\u001f\u007f-\u009f"
+
+
+class IncidentComment(Base):
+    """Append-only discussion entry on an incident (migration 0006).
+
+    The row is its own audit record: author, visibility, body and time can never change, because
+    UPDATE, DELETE and TRUNCATE are rejected by a database trigger. Both foreign keys are RESTRICT.
+    Body rules are enforced twice, identically: app.schemas.clean_comment_body and the check
+    constraints below (see migration 0006 for their exact SQL).
+    """
+    __tablename__ = "incident_comments"
+    __table_args__ = (
+        # Serves both the reporter query (incident + public) and the staff query (incident prefix).
+        Index("ix_incident_comments_incident_id_visibility_id", "incident_id", "visibility", "id"),
+        CheckConstraint("char_length(body) BETWEEN 1 AND 5000", name="ck_incident_comments_body_length"),
+        CheckConstraint(f"body !~ '[{_COMMENT_FORBIDDEN_SQL}]'", name="ck_incident_comments_body_chars"),
+        CheckConstraint(
+            f"body !~ '^[{_COMMENT_BLANK_SQL}]' AND body !~ '[{_COMMENT_BLANK_SQL}]$'", name="ck_incident_comments_body_trimmed"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="RESTRICT"), nullable=False)
+    # Always the authenticated user; never taken from the request body.
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    # No default: every insert must state who may read the comment.
+    visibility: Mapped[CommentVisibility] = mapped_column(_enum(CommentVisibility, "comment_visibility"), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    author: Mapped[User] = relationship(lazy="joined")

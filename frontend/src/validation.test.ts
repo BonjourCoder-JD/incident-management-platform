@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toCreatePayload, validateIncidentForm } from './validation';
+import { commentLength, normaliseComment, toCreatePayload, validateComment, validateIncidentForm } from './validation';
 
 const valid = { title: 'Phishing email', description: 'Reported by finance.', severity: 'medium' as const, assigneeId: '' };
 
@@ -41,5 +41,37 @@ describe('toCreatePayload', () => {
 
   it('includes a numeric assignee ID', () => {
     expect(toCreatePayload({ ...valid, assigneeId: ' 12 ' }).assignee_id).toBe(12);
+  });
+});
+
+// Mirrors backend/app/schemas.py::clean_comment_body (see backend/tests/test_comments.py).
+describe('comment rules', () => {
+  it('normalises line endings to LF and trims the same blank characters as the server', () => {
+    expect(normaliseComment('a\r\nb\rc')).toBe('a\nb\nc');
+    expect(normaliseComment(' \t\n\u00a0\u3000\u200b\ufeffword\u2028\u202f ')).toBe('word');
+    expect(normaliseComment('inner\u00a0space\tand tab')).toBe('inner\u00a0space\tand tab');
+  });
+
+  it('counts code points, so an emoji counts once', () => {
+    expect(commentLength(String.fromCodePoint(0x1f6a8).repeat(3))).toBe(3);
+    expect(commentLength('  ab\r\n  ')).toBe(2);
+  });
+
+  it('rejects blank comments, including invisible-only ones', () => {
+    for (const value of ['', '   ', '\n\t', '\u3000', '\u200b\ufeff']) expect(validateComment(value)).toBe('Enter a comment.');
+  });
+
+  it('rejects control characters but allows tabs and line breaks', () => {
+    for (const value of ['a\u0000b', 'a\u0001b', 'a\u000bb', 'a\u001bb', 'a\u007fb', 'a\u0085b', 'a\u009fb']) {
+      expect(validateComment(value)).toBe('Comments cannot contain control characters.');
+    }
+    expect(validateComment('a\tb\nc')).toBeUndefined();
+  });
+
+  it('limits comments to 5,000 code points after trimming', () => {
+    expect(validateComment('x'.repeat(5000))).toBeUndefined();
+    expect(validateComment(`  ${'x'.repeat(5000)}  `)).toBeUndefined();
+    expect(validateComment(String.fromCodePoint(0x1f6a8).repeat(5000))).toBeUndefined();
+    expect(validateComment('x'.repeat(5001))).toBe('Comments can be at most 5,000 characters.');
   });
 });

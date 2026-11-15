@@ -1,5 +1,8 @@
 import type {
   AnalyticsParams,
+  CommentCreate,
+  CommentPage,
+  IncidentComment,
   IncidentStatus,
   Severity,
   AnalyticsSummary,
@@ -199,6 +202,15 @@ export function updateIncident(id: number, changes: IncidentUpdate): Promise<Inc
 export function listIncidentEvents(id: number, params: { limit: number; offset: number }, signal?: AbortSignal): Promise<IncidentEventPage> {
   const query = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset) });
   return request<IncidentEventPage>(`/incidents/${encodeURIComponent(String(id))}/events?${query.toString()}`, { signal });
+}
+
+export function listComments(id: number, params: { limit: number; offset: number }, signal?: AbortSignal): Promise<CommentPage> {
+  const query = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset) });
+  return request<CommentPage>(`/incidents/${encodeURIComponent(String(id))}/comments?${query.toString()}`, { signal });
+}
+
+export function createComment(id: number, payload: CommentCreate): Promise<IncidentComment> {
+  return request<IncidentComment>(`/incidents/${encodeURIComponent(String(id))}/comments`, { method: 'POST', body: JSON.stringify(payload) });
 }
 
 export function getAnalyticsSummary(params: AnalyticsParams, signal?: AbortSignal): Promise<AnalyticsSummary> {

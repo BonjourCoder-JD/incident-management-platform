@@ -127,6 +127,8 @@ All incident and user endpoints require a signed-in session (401 otherwise), and
 | `GET` | `/exports/incidents.csv` | CSV of the incidents you may see, with optional `severity`/`status`; 413 above `EXPORT_MAX_ROWS` (default 10,000). Read-only; each request is recorded. |
 | `GET` | `/analytics/summary` | Dashboard figures for `from`–`to` (inclusive dates, at most 366 days) in time zone `tz`; reporters get their own incidents only. Read-only. |
 | `GET` | `/incidents/{incident_id}/events` | Audit history, newest first: `limit` (1–100, default 20), `offset`. Same visibility as the incident. Read-only. |
+| `GET` | `/incidents/{incident_id}/comments` | Discussion, oldest first: `limit` (1–100, default 50), `offset`. Reporters (own incidents only) get public comments only, and `total` counts only those. |
+| `POST` | `/incidents/{incident_id}/comments` | Add `{body, visibility}`: `visibility` is required, `public` or `internal`; reporters may post `public` only (403). `body` is 1–5,000 characters after trimming, without control characters. Comments cannot be edited or deleted. |
 
 Severity: `low`, `medium`, `high`, `critical`. Status: `open`, `investigating`, `resolved`, `closed`. `assignee_id` must be an active responder or admin (1–2147483647).
 
