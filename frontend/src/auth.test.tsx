@@ -104,7 +104,8 @@ describe('Authentication', () => {
   it('shows the signed-in user and role in the header', async () => {
     mockApi(() => jsonResponse(200, page()), { user: makeUser('admin') });
     renderAt('/');
-    const account = await screen.findByRole('link', { name: 'Account settings for admin@example.com' });
+    // The accessible name contains the visible text (email and role), prefixed with the link's purpose.
+    const account = await screen.findByRole('link', { name: 'Account settings for admin@example.com Admin' });
     expect(within(account).getByText('Admin')).toBeInTheDocument();
   });
 });

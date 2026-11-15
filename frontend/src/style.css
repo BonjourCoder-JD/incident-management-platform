@@ -64,7 +64,7 @@
     --grid: #e2e8f0;
     --sev-low: #1d4ed8;
     --sev-medium: #a16207;
-    --sev-high: #c2410c;
+    --sev-high: #9a3412; /* 4.5:1+ on the badge tint (was #c2410c, 4.34:1) */
     --sev-critical: #b91c1c;
     --st-open: #1d4ed8;
     --st-investigating: #7e22ce;

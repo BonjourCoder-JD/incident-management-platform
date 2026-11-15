@@ -43,8 +43,9 @@ function UserMenu({ user }: { user: User }) {
   const [signingOut, setSigningOut] = useState(false);
   return (
     <div className="user-menu">
-      <Link to="/account" className="user-menu-account" aria-label={`Account settings for ${user.email}`}>
-        <span className="user-menu-email">{user.email}</span>
+      <Link to="/account" className="user-menu-account">
+        <span className="visually-hidden">Account settings for</span>{' '}
+        <span className="user-menu-email">{user.email}</span>{' '}
         <span className={`badge role-badge role-${user.role}`}>{ROLE_LABELS[user.role]}</span>
       </Link>
       <button
