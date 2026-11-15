@@ -20,7 +20,7 @@ Full-stack incident management application built with React, TypeScript, FastAPI
 
 Authentication is not implemented yet; it is the next milestone.
 
-Setup, local test commands, the frontend guide and the API reference are in [README-foundation.md](README-foundation.md).
+Setup, local test commands, the frontend guide and the API reference are in [README-foundation.md](README-foundation.md). Architecture, verified functionality, known issues and the remaining milestones are in [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md).
 
 ## Continuous integration
 
