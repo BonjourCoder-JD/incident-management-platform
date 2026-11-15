@@ -1,6 +1,6 @@
 # Project Specification — Security Incident Management Platform
 
-Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) implemented and verified locally, **not yet committed**
+Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed
 
 A full-stack application for reporting, triaging and resolving security incidents. It is intended to be employer-ready: working end to end, tested automatically, secure by default, and documented.
 
@@ -198,19 +198,19 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 
 ### Milestone 3 — Analytics dashboard
 
-Implemented and verified locally on 2026-11-15. **Not yet committed**; CI confirmation will be recorded here after the push.
+Committed as `7240e3a58cab6dbb0069d6f0fb5e51b1b2c1ae94` on 2026-11-15 and verified in GitHub Actions run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) on the first attempt: Backend tests, Migration round trip (upgrade through `0004`, downgrade to base, schema removed, re-upgrade, `alembic check`, bootstrap command), Frontend tests and build, and Docker images all **success**.
 
 | Functionality | Status | Evidence |
 |---|---|---|
-| Exact counts, breakdowns, zero-filled trends and current open backlog | **Verified (local)** | `test_analytics.py::test_counts_and_breakdowns_use_creation_date_and_current_state`, `::test_daily_trend_is_zero_filled`, `::test_empty_range_returns_zeros_and_no_timings` |
-| Half-open ranges in the viewer's time zone; local dates across DST; ISO weeks clipped to the range; day/week switch at 92/93 days | **Verified (local)** | `::test_range_is_half_open_in_the_viewer_time_zone` (Asia/Tokyo boundary instants), `::test_daily_buckets_follow_local_dates_across_dst` (America/New_York), `::test_weekly_buckets_are_iso_weeks_clipped_to_the_range`, `::test_92_days_is_daily_and_93_days_is_weekly` |
-| Resolution from audit events: first resolution, `closed` counts, multi-field `updated` events count, reopened counted, earlier resolutions excluded, exact median/p90 | **Verified (local)** | `::test_resolution_metrics_come_from_audit_events`, `::test_status_change_inside_an_updated_event_counts_as_resolution` |
-| Legacy incidents excluded from resolution metrics even with partial later history, and counted | **Verified (local)** | `::test_legacy_incidents_are_excluded_from_timings_but_counted`; browser check |
-| Cross-reporter isolation of every figure (counts, backlog, trend, timings, reopened), staff see all | **Verified (local)** | `::test_reporters_see_only_their_own_incidents_and_events`, `::test_staff_scope`, `::test_analytics_queries_apply_the_visibility_rule`; browser check |
-| Validation (order, 366-day limit, malformed dates, unknown or injection-style time zones), defaults, 401, no write methods | **Verified (local)** | `::test_invalid_ranges_are_rejected` (6 cases), `::test_366_days_is_allowed_and_defaults_cover_30_days`, `::test_requires_authentication`, `::test_no_write_methods` |
-| Dedicated `REPEATABLE READ, READ ONLY` snapshot that leaves pooled connections unchanged | **Verified (local)** | `::test_real_dependency_uses_a_read_only_repeatable_read_snapshot` |
-| Migration `0004` upgrade, downgrade to base, re-upgrade; `alembic check` including the partial index | **Verified (local)** | CI-equivalent run on a disposable PostgreSQL |
-| Dashboard: tiles, meter lists, trend chart with keyboard tooltip and table view, presets and custom ranges in the URL, browser time zone, dimmed refetch, empty/error/422 states, reporter "My dashboard" | **Verified (local)** | `DashboardPage.test.tsx` (10 tests, loading states held with `deferred()`); browser check |
+| Exact counts, breakdowns, zero-filled trends and current open backlog | **Verified** | `test_analytics.py::test_counts_and_breakdowns_use_creation_date_and_current_state`, `::test_daily_trend_is_zero_filled`, `::test_empty_range_returns_zeros_and_no_timings` |
+| Half-open ranges in the viewer's time zone; local dates across DST; ISO weeks clipped to the range; day/week switch at 92/93 days | **Verified** | `::test_range_is_half_open_in_the_viewer_time_zone` (Asia/Tokyo boundary instants), `::test_daily_buckets_follow_local_dates_across_dst` (America/New_York), `::test_weekly_buckets_are_iso_weeks_clipped_to_the_range`, `::test_92_days_is_daily_and_93_days_is_weekly` |
+| Resolution from audit events: first resolution, `closed` counts, multi-field `updated` events count, reopened counted, earlier resolutions excluded, exact median/p90 | **Verified** | `::test_resolution_metrics_come_from_audit_events`, `::test_status_change_inside_an_updated_event_counts_as_resolution` |
+| Legacy incidents excluded from resolution metrics even with partial later history, and counted | **Verified** | `::test_legacy_incidents_are_excluded_from_timings_but_counted`; browser check |
+| Cross-reporter isolation of every figure (counts, backlog, trend, timings, reopened), staff see all | **Verified** | `::test_reporters_see_only_their_own_incidents_and_events`, `::test_staff_scope`, `::test_analytics_queries_apply_the_visibility_rule`; browser check |
+| Validation (order, 366-day limit, malformed dates, unknown or injection-style time zones), defaults, 401, no write methods | **Verified** | `::test_invalid_ranges_are_rejected` (6 cases), `::test_366_days_is_allowed_and_defaults_cover_30_days`, `::test_requires_authentication`, `::test_no_write_methods` |
+| Dedicated `REPEATABLE READ, READ ONLY` snapshot that leaves pooled connections unchanged | **Verified** | `::test_real_dependency_uses_a_read_only_repeatable_read_snapshot` |
+| Migration `0004` upgrade, downgrade to base, re-upgrade; `alembic check` including the partial index | **Verified** | CI-equivalent run on a disposable PostgreSQL |
+| Dashboard: tiles, meter lists, trend chart with keyboard tooltip and table view, presets and custom ranges in the URL, browser time zone, dimmed refetch, empty/error/422 states, reporter "My dashboard" | **Verified** | `DashboardPage.test.tsx` (10 tests, loading states held with `deferred()`); browser check |
 
 **Test-quality check:** 15 backend rules were deliberately broken one at a time (visibility on the first-resolution subquery, the cohort, counts and backlog; legacy exclusion; counting `updated` events; earlier resolutions; first vs latest resolution; half-open range end; viewer-zone buckets; partial-week clipping; read-only snapshot; range limit; time zone validation; reopened counting): all 15 caught. 8 frontend behaviours were broken the same way: 7 were caught at first; the miss (time zone hard-coded to UTC, invisible because the test runner's zone is UTC) led to `uses the browser time zone, not UTC, for the range and its days`, which now catches it.
 
@@ -282,7 +282,7 @@ Committed as `1ae693b52ed41bbcc274df03fcfa8d1ec6a64e22` on 2026-11-15 and verifi
 | Frontend | Incident list with filters and pagination kept in the URL; create form; detail with status change and editing | **Verified** | page tests; manual browser checks |
 | Frontend | Loading, empty, error and success states; API status indicator | **Verified** | page tests; manual check with backend stopped |
 | Frontend | Responsive layout, light/dark themes, keyboard skip link; user-entered HTML rendered as text | **Verified (manual)** | Browser checks, 2026-11-14 and 2026-11-15 |
-| CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | Latest: GitHub Actions run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) on `ec3ed2e` (Milestone 2): all four jobs **success**. Milestone 1: run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
+| CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | Latest: GitHub Actions run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) on `7240e3a` (Milestone 3): all four jobs **success**. Milestone 2: run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) on `ec3ed2e`: all four jobs **success**. Milestone 1: run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
 | Supply chain | Lockfile with `npm ci`; read-only CI token; no repository secrets | **Implemented** | `frontend/package-lock.json`, `ci.yml` |
 
 **Test counts:** 122 backend (pytest), 78 frontend (Vitest + React Testing Library). After Milestone 2: 98 and 68. After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
@@ -328,7 +328,7 @@ Every change to an incident is recorded and cannot be edited.
 - [x] Incident detail page shows a readable activity timeline.
 - [x] Tests prove: each create and update produces exactly one correct event; no-op updates produce none; actor and diff are correct; history respects permissions, including cross-reporter denial.
 
-### Milestone 3 — Analytics dashboard · Implemented (pending commit)
+### Milestone 3 — Analytics dashboard · Complete (`7240e3a`)
 
 A dashboard of incident metrics computed in PostgreSQL.
 
