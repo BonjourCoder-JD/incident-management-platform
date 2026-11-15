@@ -1,6 +1,6 @@
 # Project Specification — Security Incident Management Platform
 
-Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed · Milestone 4 (secure CSV export) complete — commit `02eba64`, CI run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) passed · Milestone 5 (end-to-end tests) implemented and verified locally, **not yet committed** · Roadmap expanded on 2026-11-15 (Milestones 5, 5A, 5B, 5C, 6 and a final presentation, all **Planned**)
+Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed · Milestone 4 (secure CSV export) complete — commit `02eba64`, CI run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) passed · Milestone 5 (end-to-end tests) complete — commits `13d3c34`, `7e65e81`, `dea4ba7`, CI run [43726750357](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43726750357) passed (all five jobs) · Roadmap expanded on 2026-11-15 (Milestones 5, 5A, 5B, 5C, 6 and a final presentation, all **Planned**)
 
 A full-stack application for reporting, triaging and resolving security incidents. It is intended to be employer-ready: working end to end, tested automatically, secure by default, and documented.
 
@@ -222,20 +222,30 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 
 ### Milestone 5 — Permanent Playwright end-to-end tests
 
-Implemented and verified locally on 2026-11-15. **Not yet committed**; CI confirmation will be recorded here after the push.
+Released on 2026-11-15 in three commits:
+
+| Commit | Contents |
+|---|---|
+| `13d3c3417c62aca1590e84e76e9ec5e2b46b2ee4` | `fix: meet WCAG contrast and label-in-name requirements` (DEF-1, DEF-2) |
+| `7e65e81116ba56dafefb9b7ff94ae21c97253230` | `test: add Playwright end-to-end suite and CI job` (suite, CI job, roadmap expansion) |
+| `dea4ba72496f52dbf4f638ee7f76925c52887401` | `test: wait for render before the E2E skip-link focus check` |
+
+**CI record:**
+- Run [43724759395](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43724759395) on `7e65e81` (the first two commits, pushed together): **failure**. Backend tests, Migration round trip, Frontend tests and build, and Docker images passed; End-to-end tests failed one test (37 passed): `the first Tab stop is the skip link` found the skip link never focused. The test pressed Tab immediately after `page.goto`, which resolves on the load event and can precede React's first render. The failure-evidence artifact uploaded as designed (55 KB). The race did not reproduce locally, even under 6x CPU throttling, so the cause is the most likely explanation rather than a proven one. Fix in `dea4ba7`: wait for the page heading before pressing Tab, and report the actually focused element if the check fails; assertion unchanged, no application change. Locally the fixed test passed 10 of 10 repeats and the full suite passed 38 of 38.
+- Run [43726750357](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43726750357) on `dea4ba7`: **success**, all five jobs: Backend tests (48 s), Migration round trip (34 s), Frontend tests and build (26 s), Docker images (31 s), End-to-end tests (194 s; **38 passed** in 37.7 s of test time).
 
 **Design.** `e2e/run.sh` (used by CI and locally) starts Compose project `imp-e2e` with `e2e/compose.e2e.yaml` (frontend on `127.0.0.1:15173`, API unpublished, `EXPORT_MAX_ROWS=5`), generates random database and admin passwords per run (masked in CI, never written to disk, taking precedence over a developer `.env`), migrates, creates the admin with the bootstrap command, seeds two synthetic legacy incidents, runs Playwright, and always removes the stack. Before any `down --volumes` it verifies that every volume labelled for the project is named `imp-e2e_*`; development volumes belong to a different project and are never in scope. Tests create their own synthetic users (random passwords, `example.com` addresses) and data, so they are independent of order and of each other. Selectors are roles, labels and visible text; waits are web-first assertions with no fixed sleeps; time zone is fixed to Europe/London. In CI, traces and the HTML report are off (they can contain request bodies and typed values); only failure screenshots, page snapshots (`error-context.md`) and the backend log are uploaded, for 7 days.
 
 | Functionality | Status | Evidence |
 |---|---|---|
-| Sign-in and sign-out, generic error, deep link kept, 401 without session, 403 without CSRF token, hardened cookie and no web storage, role change and deactivation end sessions, password change signs out other devices, login rate limiting, admin account management without self-demotion | **Verified (local)** | `e2e/tests/auth.spec.ts` (8 tests) |
-| Create with validation, filters and pagination in the URL with Back, responder status/edit/assignment visible to the reporter, not-found routes, HTML shown as text, skip link, no-op saves | **Verified (local)** | `e2e/tests/incidents.spec.ts` (7 tests) |
-| Reporter UI limits, API refusals (403/422), cross-reporter and legacy 404s for detail, update and history, staff see everything | **Verified (local)** | `e2e/tests/authorization.spec.ts` (4 tests) |
-| History entries with correct actors, collapsed description diff, "Show older", legacy explanation, HTML as text, no-op and spoofed-actor protection | **Verified (local)** | `e2e/tests/history.spec.ts` (5 tests) |
-| Dashboard: exact reporter figures and isolation, multi-field resolution counted, legacy exclusion explained, presets/custom ranges/range errors in the URL, keyboard tooltip and table | **Verified (local)** | `e2e/tests/dashboard.spec.ts` (4 tests) |
-| CSV export: BOM, header, own rows only, formula neutralised, quoting and Unicode, headers, filters and filename, exactly-at-limit allowed and over-limit refused | **Verified (local)** | `e2e/tests/export.spec.ts` (3 tests) |
-| axe WCAG 2.1 A/AA scan (fails on serious/critical) of sign-in, list, detail, create with errors, dashboard, users and account pages in light and dark themes; no horizontal scrolling at 390 px | **Verified (local)** | `e2e/tests/accessibility.spec.ts` (7 tests) |
-| Every test fails on unexpected browser console errors | **Verified (local)** | automatic fixture in `e2e/support/fixtures.ts` |
+| Sign-in and sign-out, generic error, deep link kept, 401 without session, 403 without CSRF token, hardened cookie and no web storage, role change and deactivation end sessions, password change signs out other devices, login rate limiting, admin account management without self-demotion | **Verified** | `e2e/tests/auth.spec.ts` (8 tests) |
+| Create with validation, filters and pagination in the URL with Back, responder status/edit/assignment visible to the reporter, not-found routes, HTML shown as text, skip link, no-op saves | **Verified** | `e2e/tests/incidents.spec.ts` (7 tests) |
+| Reporter UI limits, API refusals (403/422), cross-reporter and legacy 404s for detail, update and history, staff see everything | **Verified** | `e2e/tests/authorization.spec.ts` (4 tests) |
+| History entries with correct actors, collapsed description diff, "Show older", legacy explanation, HTML as text, no-op and spoofed-actor protection | **Verified** | `e2e/tests/history.spec.ts` (5 tests) |
+| Dashboard: exact reporter figures and isolation, multi-field resolution counted, legacy exclusion explained, presets/custom ranges/range errors in the URL, keyboard tooltip and table | **Verified** | `e2e/tests/dashboard.spec.ts` (4 tests) |
+| CSV export: BOM, header, own rows only, formula neutralised, quoting and Unicode, headers, filters and filename, exactly-at-limit allowed and over-limit refused | **Verified** | `e2e/tests/export.spec.ts` (3 tests) |
+| axe WCAG 2.1 A/AA scan (fails on serious/critical) of sign-in, list, detail, create with errors, dashboard, users and account pages in light and dark themes; no horizontal scrolling at 390 px | **Verified** | `e2e/tests/accessibility.spec.ts` (7 tests) |
+| Every test fails on unexpected browser console errors | **Verified** | automatic fixture in `e2e/support/fixtures.ts` |
 
 **Results (local, 2026-11-15):** 38 tests; **three consecutive runs, 38/38 each**, on freshly built stacks; about 1.1 minutes of test time and 169–170 s per run including build and teardown. Development containers and volumes were unchanged before and after (volume list compared; database container identical).
 
@@ -362,7 +372,7 @@ Committed as `1ae693b52ed41bbcc274df03fcfa8d1ec6a64e22` on 2026-11-15 and verifi
 | Frontend | Incident list with filters and pagination kept in the URL; create form; detail with status change and editing | **Verified** | page tests; manual browser checks |
 | Frontend | Loading, empty, error and success states; API status indicator | **Verified** | page tests; manual check with backend stopped |
 | Frontend | Responsive layout, light/dark themes, keyboard skip link; user-entered HTML rendered as text | **Verified (manual)** | Browser checks, 2026-11-14 and 2026-11-15 |
-| CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | Latest: GitHub Actions run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) on `02eba64` (Milestone 4): all four jobs **success**. Milestone 3: run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) on `7240e3a`: all four jobs **success**. Milestone 2: run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) on `ec3ed2e`: all four jobs **success**. Milestone 1: run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
+| CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | Latest: GitHub Actions run [43726750357](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43726750357) on `dea4ba7` (Milestone 5): all **five** jobs **success**, including End-to-end tests (38 passed). Milestone 4: run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) on `02eba64`: all four jobs **success**. Milestone 3: run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) on `7240e3a`: all four jobs **success**. Milestone 2: run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) on `ec3ed2e`: all four jobs **success**. Milestone 1: run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
 | Supply chain | Lockfile with `npm ci`; read-only CI token; no repository secrets | **Implemented** | `frontend/package-lock.json`, `ci.yml` |
 
 **Test counts:** 165 backend (pytest), 91 frontend (Vitest + React Testing Library), 38 end-to-end (Playwright). After Milestone 3: 122 and 78. After Milestone 2: 98 and 68. After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
@@ -404,7 +414,7 @@ Milestones are delivered in order, each as a small, separately approved change w
 | Order | Milestone | Status |
 |---|---|---|
 | 1–4 | Authentication/RBAC, audit trail, analytics dashboard, secure CSV export | **Complete** (see *Completed functionality*) |
-| 5 | Permanent Playwright end-to-end tests in GitHub Actions | Implemented, verified locally (pending commit and CI) |
+| 5 | Permanent Playwright end-to-end tests in GitHub Actions | **Complete** (`13d3c34`, `7e65e81`, `dea4ba7`) |
 | 5A | Incident comments and internal-only responder notes | Planned |
 | 5B | SLA tracking, response/resolution deadlines, overdue indicators and escalation | Planned |
 | 5C | AI-assisted incident triage with human approval | Planned |
@@ -462,7 +472,7 @@ Export the incidents a user is allowed to see, using the active filters.
 - [x] Tests cover filters, permissions (including cross-reporter denial), escaping, injection neutralisation and headers.
 - [x] Every export request recorded in an append-only table (approved addition).
 
-### Milestone 5 — Playwright end-to-end tests in CI · Implemented (pending commit)
+### Milestone 5 — Playwright end-to-end tests in CI · Complete (`13d3c34`, `7e65e81`, `dea4ba7`)
 
 Turn the manual browser verification into a permanent, automated suite. Plan approved on 2026-11-15; see *Completed functionality* for the local verification.
 
@@ -471,7 +481,7 @@ Turn the manual browser verification into a permanent, automated suite. Plan app
 - [x] Runs against the full Docker Compose stack with a disposable database seeded by fixtures (admin created with the bootstrap command), never a developer database.
 - [x] New CI job that runs the suite and uploads failure evidence; no repository secrets needed. (Approved refinement: screenshots, page snapshots and backend logs only; traces are local-only because they can contain request bodies.)
 - [x] Includes mobile-viewport checks for no horizontal scrolling, and a basic automated accessibility scan of the main pages.
-- [ ] Reliable: no fixed sleeps; passes repeatedly in CI. (Three consecutive local runs passed; CI confirmation pending.)
+- [x] Reliable: no fixed sleeps; passes repeatedly in CI. (Four consecutive full local runs passed; CI run 43726750357 passed. One CI timing failure, run 43724759395, was fixed in `dea4ba7`; keep watching for recurrence.)
 
 ### Milestone 5A — Incident comments and internal-only responder notes · Planned
 
