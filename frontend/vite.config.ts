@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
@@ -7,5 +7,11 @@ export default defineConfig({
     proxy: {
       '/api': { target: 'http://backend:8000', changeOrigin: true, rewrite: path => path.replace(/^\/api/, '') },
     },
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    restoreMocks: true,
+    unstubGlobals: true,
   },
 });
