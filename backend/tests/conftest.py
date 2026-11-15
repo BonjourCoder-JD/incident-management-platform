@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
+from app.analytics import get_analytics_connection
 from app.database import engine, get_db
 from app.main import app
 from app.models import User, UserRole
@@ -48,12 +49,18 @@ def db(session_factory):
 
 
 @pytest.fixture(autouse=True)
-def _isolate(session_factory):
+def _isolate(session_factory, connection):
     def override_db():
         with session_factory() as session:
             yield session
 
+    def override_analytics():
+        # Analytics reads the test's uncommitted data through the same rolled-back connection.
+        # The real dependency's REPEATABLE READ, READ ONLY transaction is tested separately.
+        yield connection
+
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_analytics_connection] = override_analytics
     login_limiter.reset()
     yield
     app.dependency_overrides.clear()

@@ -96,6 +96,41 @@ export interface IncidentEventPage {
   users: UserSummary[];
 }
 
+// ---- Analytics (GET /analytics/summary) ----
+
+export interface AnalyticsParams {
+  /** Inclusive calendar dates, YYYY-MM-DD. */
+  from: string;
+  to: string;
+  /** IANA time zone used for day boundaries and buckets. */
+  tz: string;
+}
+
+export interface TrendPoint {
+  period_start: string;
+  period_end: string;
+  created: number;
+  resolved: number;
+}
+
+export interface AnalyticsSummary {
+  scope: 'own' | 'all';
+  range: { start_date: string; end_date: string; timezone: string; bucket: 'day' | 'week' };
+  totals: { incidents: number; open: number; resolved_or_closed: number };
+  by_status: { status: IncidentStatus; count: number }[];
+  by_severity: { severity: Severity; count: number }[];
+  open_backlog_by_severity: { severity: Severity; count: number }[];
+  trend: TrendPoint[];
+  resolution: {
+    resolved_count: number;
+    median_hours: number | null;
+    p90_hours: number | null;
+    reopened_count: number;
+    excluded_legacy: number;
+    by_severity: { severity: Severity; resolved_count: number; median_hours: number | null }[];
+  };
+}
+
 export interface IncidentListParams {
   limit: number;
   offset: number;

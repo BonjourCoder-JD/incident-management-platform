@@ -73,6 +73,7 @@ The web interface at http://localhost:5173 asks you to sign in, then lets you:
 - **Browse incidents** (reporters see only their own, under "My incidents") newest first, filter by severity and status, and page through results (10 per page). Filters and the page number are kept in the URL, so filtered views can be bookmarked and the browser Back button works.
 - **Report an incident** at `/incidents/new`, with inline validation that mirrors the API rules (required title up to 200 characters, required description and severity). Responders and admins can also choose an assignee.
 - **Open an incident** at `/incidents/{id}` to edit its title, description and severity. Responders and admins can also change its status in one click and reassign it. Only changed fields are sent.
+- **See the dashboard** at `/dashboard`: incidents created, still open and resolved in a chosen date range (last 7/30/90 days, 12 months or custom, in your browser's time zone), breakdowns by status and severity, the current open backlog, a created-versus-resolved trend (with a table view), and time to first resolution measured from the audit trail. Reporters see figures for their own incidents only.
 - **Review its history** on the same page: who created it, and every later change to the title, description, severity, status or assignee, newest first, with long description changes collapsed. Reporters see the history of their own incidents only.
 - **Manage users** at `/users` (admins only): create accounts, change roles, deactivate and reactivate.
 - **Change your password** at `/account`, which signs out your other devices.
@@ -104,6 +105,7 @@ All incident and user endpoints require a signed-in session (401 otherwise), and
 | `GET` | `/incidents` | List visible incidents, newest first. Query: `limit` (1–100, default 20), `offset` (≥0), `severity`, `status` |
 | `GET` | `/incidents/{incident_id}` | Get one incident (404 if it does not exist or is not visible to you) |
 | `PATCH` | `/incidents/{incident_id}` | Update `title`, `description`, `severity`; responders and admins also `status` and `assignee_id` |
+| `GET` | `/analytics/summary` | Dashboard figures for `from`–`to` (inclusive dates, at most 366 days) in time zone `tz`; reporters get their own incidents only. Read-only. |
 | `GET` | `/incidents/{incident_id}/events` | Audit history, newest first: `limit` (1–100, default 20), `offset`. Same visibility as the incident. Read-only. |
 
 Severity: `low`, `medium`, `high`, `critical`. Status: `open`, `investigating`, `resolved`, `closed`. `assignee_id` must be an active responder or admin (1–2147483647).

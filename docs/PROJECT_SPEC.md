@@ -1,6 +1,6 @@
 # Project Specification — Security Incident Management Platform
 
-Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed
+Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) implemented and verified locally, **not yet committed**
 
 A full-stack application for reporting, triaging and resolving security incidents. It is intended to be employer-ready: working end to end, tested automatically, secure by default, and documented.
 
@@ -29,6 +29,7 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 | Frontend | React 19, TypeScript (strict), Vite 6, no UI or routing libraries | `frontend/` |
 | API | FastAPI, Pydantic v2 schemas | `backend/app/main.py`, `auth.py`, `users.py`, `incidents.py`, `schemas.py` |
 | Audit trail | Append-only `incident_events` table, written in the same transaction as each incident change | `backend/app/audit.py`, migration `0003` |
+| Analytics | PostgreSQL aggregates in one read-only snapshot; React dashboard with dependency-free SVG/CSS charts | `backend/app/analytics.py`, migration `0004`; `frontend/src/pages/DashboardPage.tsx`, `frontend/src/components/dashboard/` |
 | Security | Argon2id hashing (`argon2-cffi`), session tokens, login rate limiting | `backend/app/security.py`, `auth.py`, `config.py` |
 | Persistence | SQLAlchemy 2 ORM, Alembic migrations | `backend/app/models.py`, `database.py`, `backend/migrations/` |
 | Database | PostgreSQL 17 | `compose.yaml` service `db` |
@@ -75,7 +76,7 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 - Incidents a reporter may not see return **404**, identical to a missing incident, so their existence is not revealed.
 - Ownership (`reporter_id`) is always taken from the session; a client-supplied `reporter_id` is rejected (422).
 - Assignees must be active responders or admins (otherwise 422).
-- **The visibility rule lives in one function (`_visible_to` in `backend/app/incidents.py`). Audit history uses it (Milestone 2); analytics and CSV export must reuse it.**
+- **The visibility rule lives in one function (`_visible_to` in `backend/app/incidents.py`). Audit history (Milestone 2) and every analytics query (Milestone 3, including the event-based resolution queries) use it; CSV export must reuse it.**
 - Incident history follows incident visibility: reporters can read the history of their own incidents only (404 otherwise, including legacy incidents); responders and admins can read every incident's history.
 
 ### Audit trail design (Milestone 2)
@@ -91,6 +92,36 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 | History start | **No backfill.** Changes made before migration `0003` have no trustworthy actor or time, so legacy incidents show an empty history with an explanation. | — |
 | Reading | `GET /incidents/{id}/events` checks incident visibility first, then returns events newest first (`created_at`, then `id`), paginated, with the emails of people referenced by assignee changes. | — |
 | Rendering | The UI shows every audited value as text through React (never as HTML) and falls back to plain strings for unknown fields. | Verified with an HTML/JavaScript payload in a title and description. |
+
+### Analytics design (Milestone 3)
+
+`GET /analytics/summary?from=YYYY-MM-DD&to=YYYY-MM-DD&tz=Area/City` returns every dashboard figure from **one** request.
+
+| Topic | Decision | Notes and limits |
+|---|---|---|
+| Range | Inclusive calendar dates in the viewer's IANA time zone, applied as the **half-open** interval `[from 00:00, to + 1 day 00:00)` in that zone. Default: the last 30 days ending today in that zone; at most **366 days**; `from ≤ to`. | Errors are 422 with `loc` `["query", "from" \| "to" \| "tz"]`. |
+| Time zone | Validated against PostgreSQL's `pg_timezone_names` (cached per process) and always passed as a bound parameter. The frontend sends the browser's zone. | An unknown or injection-style value is rejected before any query uses it. |
+| Buckets | Daily up to 92 days, otherwise **ISO weeks** (Monday start, `date_trunc('week', …)` on local wall-clock time). The first and last weeks are clipped to the range and report their own `period_start`/`period_end`. Buckets are zero-filled. | Days follow local dates across DST changes. |
+| Counts and breakdowns | Incidents **created** in the range (`incidents.created_at`, database-set and reliable for legacy incidents too), by their **current** status and severity. | — |
+| Current open backlog | Open or investigating **right now**, by severity, **regardless of the range**. Labelled "Current open backlog" in the UI. | — |
+| Resolution | An incident's **first** audit event whose status change moves it into `resolved` or `closed`, whether recorded as `status_changed` or inside a multi-field `updated` event. Time to resolution = that event's time − `incidents.created_at`. Median and 90th percentile (`percentile_cont`), overall and per severity, for incidents first resolved **in the range**; the resolved trend uses the same events. `reopened_count` counts those incidents ever moved from resolved/closed back to open/investigating. Never derived from `updated_at`. | Durations are returned in hours with 2 decimals (36 s). |
+| Legacy incidents | Incidents with no `created` audit event (created before migration `0003`) are **excluded from all resolution metrics, even if later status changes were audited**, and counted in `excluded_legacy`; the UI explains the exclusion. They still count in totals, breakdowns and the created trend. | History before `0003` cannot be trusted to show the first resolution. |
+| Visibility | Every query, including the first-resolution subquery over `incident_events`, is restricted with `_visible_to`. The response says `scope: "own"` for reporters and `"all"` for staff. | A structural test checks every query carries the reporter filter. |
+| Consistency | Analytics uses a **dedicated** connection whose transaction starts with `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY`, so all figures come from one snapshot and no write is possible. The setting is transaction-scoped: pooled connections and normal request sessions are unchanged (tested). | — |
+| Query shape | 5 queries per request. First resolutions are found from resolution events **inside** the range with an anti-join on earlier ones (so a 30-day range reads only nearby events); the cohort is built once and overall, per-severity and per-bucket figures come from one `GROUPING SETS` pass; legacy status is a single `LEFT JOIN` on the `created` event. | Visibility is applied in both the subquery and the cohort. |
+| Charts | Dependency-free SVG/CSS following the project's data-visualization method: one-hue meter lists for breakdowns (status and severity colours stay reserved for badges); a two-series line chart (categorical slots 1 and 2, validated for colour-vision deficiency and contrast against both card surfaces) with legend, direct end labels, crosshair tooltip on pointer **and keyboard**, a text summary, and a table view. Refetching keeps the previous figures dimmed. | Validator: worst CVD ΔE 24.7 (light), 26.8 (dark); contrast ≥ 3:1. |
+
+**Index decision (migration `0004`), from `EXPLAIN ANALYZE` on 50,000 incidents and 225,547 audit events** (200 reporters, 5,000 legacy incidents; resolutions recorded as both `status_changed` and multi-field `updated` events; 10% reopened). Endpoint time, median of 5 runs, Europe/London:
+
+| Indexes | Staff 30 d | Staff 366 d | Reporter 30 d | Reporter 366 d |
+|---|---|---|---|---|
+| Before `0004` | 59.6 ms | 154.7 ms | 33.8 ms | 30.4 ms |
+| **`0004` (shipped)** | **44.5 ms** | **135.8 ms** | **30.3 ms** | **31.7 ms** |
+| `0004` + `(reporter_id, created_at)` | 43.4 ms | 138.3 ms | 30.6 ms | 32.5 ms |
+
+- **Added:** `ix_incidents_created_at` (used by every range filter and the created trend) and `ix_incident_events_first_resolution`, a partial index on `(incident_id, created_at) WHERE (changes -> 'status' ->> 'to') IN ('resolved', 'closed')` (used by both the in-range scan and the earlier-resolution anti-join; its predicate must match `analytics._resolution_event()`).
+- **Not added:** a `(reporter_id, created_at)` index (the planner used it, but it changed timings by about 1 ms either way, so the existing `ix_incidents_reporter_id` is kept), and a time-ordered resolution index (never chosen by the planner).
+- **Query restructuring mattered more than indexes:** the first design recomputed first resolutions in four separate queries (staff: 211 ms for 30 days, 400 ms for 366 days); computing the cohort once with `GROUPING SETS`, scanning only in-range resolution events and replacing repeated per-row legacy checks brought staff to the figures above.
 
 ### Data model
 
@@ -120,7 +151,7 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 | `assignee_id` | integer, nullable, FK → `users` (`SET NULL`) | API accepts 1–2147483647; must be an active responder or admin |
 | `created_at`, `updated_at` | timestamptz | set by the database; `updated_at` refreshed on ORM update |
 
-Indexes: `ix_incidents_status_severity`, `ix_incidents_reporter_id`, `ix_incidents_assignee_id`, `ix_auth_sessions_user_id`.
+Indexes: `ix_incidents_status_severity`, `ix_incidents_reporter_id`, `ix_incidents_assignee_id`, `ix_incidents_created_at` (migration `0004`), `ix_auth_sessions_user_id`.
 
 **`incident_events`** (migration `0003`): append-only audit trail.
 
@@ -133,7 +164,7 @@ Indexes: `ix_incidents_status_severity`, `ix_incidents_reporter_id`, `ix_inciden
 | `changes` | `JSONB`, not null | `{"field": {"from": old, "to": new}}` for allowlisted fields only |
 | `created_at` | timestamptz | set by the database at insert |
 
-Indexes: `ix_incident_events_incident_id_id (incident_id, id)`, `ix_incident_events_actor_id`.
+Indexes: `ix_incident_events_incident_id_id (incident_id, id)`, `ix_incident_events_actor_id`, and the partial `ix_incident_events_first_resolution (incident_id, created_at) WHERE status moved to resolved/closed` (migration `0004`).
 
 **Legacy data strategy (migration `0002`).** Every existing incident is preserved. Incidents created before accounts existed keep `reporter_id = NULL` and are visible to responders and admins only. Existing `assignee_id` values are set to `NULL`, because no users existed before this migration, so they could not refer to anyone; this step is not reversed by a downgrade. The downgrade otherwise removes the users and sessions tables, the ownership column, both foreign keys and the `user_role` type.
 
@@ -153,6 +184,7 @@ All `/incidents` and `/users` endpoints require a session (**401** otherwise). S
 | `GET` | `/incidents/{id}` | Any role | 404 if missing **or not visible** |
 | `PATCH` | `/incidents/{id}` | Any role | Partial update. Reporters: own incidents, no `status`/`assignee_id` (403). Only `assignee_id` may be `null`. |
 | `GET` | `/incidents/{id}/events` | Any role (visibility applies) | Audit history newest first. `limit` 1–100 (default 20), `offset` ≥ 0. Returns `{items, total, limit, offset, users}`; each item is `{id, action, changes, actor: {id, email}, created_at}`. 404 when the incident is missing or not visible. No write methods (405). |
+| `GET` | `/analytics/summary` | Any role (visibility applies) | `from`, `to` (inclusive dates), `tz` (IANA). Returns `{scope, range, totals, by_status, by_severity, open_backlog_by_severity, trend, resolution}`; see *Analytics design*. 422 for invalid ranges or time zones. Read-only (405 for writes). |
 | `GET` | `/users/assignees` | Responder, admin | Active responders and admins as `{id, email}` |
 | `GET` | `/users` | Admin | All accounts |
 | `POST` | `/users` | Admin | Create `{email, password, role}`. 409 on duplicate email. |
@@ -163,6 +195,28 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 ---
 
 ## Completed functionality
+
+### Milestone 3 — Analytics dashboard
+
+Implemented and verified locally on 2026-11-15. **Not yet committed**; CI confirmation will be recorded here after the push.
+
+| Functionality | Status | Evidence |
+|---|---|---|
+| Exact counts, breakdowns, zero-filled trends and current open backlog | **Verified (local)** | `test_analytics.py::test_counts_and_breakdowns_use_creation_date_and_current_state`, `::test_daily_trend_is_zero_filled`, `::test_empty_range_returns_zeros_and_no_timings` |
+| Half-open ranges in the viewer's time zone; local dates across DST; ISO weeks clipped to the range; day/week switch at 92/93 days | **Verified (local)** | `::test_range_is_half_open_in_the_viewer_time_zone` (Asia/Tokyo boundary instants), `::test_daily_buckets_follow_local_dates_across_dst` (America/New_York), `::test_weekly_buckets_are_iso_weeks_clipped_to_the_range`, `::test_92_days_is_daily_and_93_days_is_weekly` |
+| Resolution from audit events: first resolution, `closed` counts, multi-field `updated` events count, reopened counted, earlier resolutions excluded, exact median/p90 | **Verified (local)** | `::test_resolution_metrics_come_from_audit_events`, `::test_status_change_inside_an_updated_event_counts_as_resolution` |
+| Legacy incidents excluded from resolution metrics even with partial later history, and counted | **Verified (local)** | `::test_legacy_incidents_are_excluded_from_timings_but_counted`; browser check |
+| Cross-reporter isolation of every figure (counts, backlog, trend, timings, reopened), staff see all | **Verified (local)** | `::test_reporters_see_only_their_own_incidents_and_events`, `::test_staff_scope`, `::test_analytics_queries_apply_the_visibility_rule`; browser check |
+| Validation (order, 366-day limit, malformed dates, unknown or injection-style time zones), defaults, 401, no write methods | **Verified (local)** | `::test_invalid_ranges_are_rejected` (6 cases), `::test_366_days_is_allowed_and_defaults_cover_30_days`, `::test_requires_authentication`, `::test_no_write_methods` |
+| Dedicated `REPEATABLE READ, READ ONLY` snapshot that leaves pooled connections unchanged | **Verified (local)** | `::test_real_dependency_uses_a_read_only_repeatable_read_snapshot` |
+| Migration `0004` upgrade, downgrade to base, re-upgrade; `alembic check` including the partial index | **Verified (local)** | CI-equivalent run on a disposable PostgreSQL |
+| Dashboard: tiles, meter lists, trend chart with keyboard tooltip and table view, presets and custom ranges in the URL, browser time zone, dimmed refetch, empty/error/422 states, reporter "My dashboard" | **Verified (local)** | `DashboardPage.test.tsx` (10 tests, loading states held with `deferred()`); browser check |
+
+**Test-quality check:** 15 backend rules were deliberately broken one at a time (visibility on the first-resolution subquery, the cohort, counts and backlog; legacy exclusion; counting `updated` events; earlier resolutions; first vs latest resolution; half-open range end; viewer-zone buckets; partial-week clipping; read-only snapshot; range limit; time zone validation; reopened counting): all 15 caught. 8 frontend behaviours were broken the same way: 7 were caught at first; the miss (time zone hard-coded to UTC, invisible because the test runner's zone is UTC) led to `uses the browser time zone, not UTC, for the range and its days`, which now catches it.
+
+**Manual browser check (2026-11-15):** 19/19 checks in Chromium on a disposable stack: staff, two reporters and a legacy incident; UI figures compared against the API's own response; isolation between reporters; a resolution recorded through a multi-field update; keyboard tooltip and table view; presets, custom ranges and a server range error; dark and light themes using the validated colours; phone width without horizontal scrolling.
+
+**Dependency checks:** `npm audit` 0 vulnerabilities; `pip-audit -r backend/requirements.txt` no known vulnerabilities. No new dependencies.
 
 ### Milestone 2 — Incident audit trail
 
@@ -231,7 +285,7 @@ Committed as `1ae693b52ed41bbcc274df03fcfa8d1ec6a64e22` on 2026-11-15 and verifi
 | CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | Latest: GitHub Actions run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) on `ec3ed2e` (Milestone 2): all four jobs **success**. Milestone 1: run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
 | Supply chain | Lockfile with `npm ci`; read-only CI token; no repository secrets | **Implemented** | `frontend/package-lock.json`, `ci.yml` |
 
-**Test counts:** 98 backend (pytest), 68 frontend (Vitest + React Testing Library). After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
+**Test counts:** 122 backend (pytest), 78 frontend (Vitest + React Testing Library). After Milestone 2: 98 and 68. After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
 
 The manual browser checks were one-off Playwright scripts, not part of the repository or CI. Milestone 5 makes them permanent.
 
@@ -253,6 +307,8 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 | ISSUE-10 | Demoting a responder or admin to reporter does not unassign incidents already assigned to them. | Stale assignment visible to staff. | Decided in Milestone 2: deferred to Milestone 6 (automatic unassignment on demotion or deactivation, recorded as `assignment_changed` events with the admin as actor). |
 | ISSUE-12 | The app connects to PostgreSQL as the owner of `incident_events`, so a compromised app or operator with that role could disable the immutability trigger. | Audit immutability is enforced against the application's own SQL and accidental changes, not against a malicious database owner. | Milestone 6: run the app as a role with only `INSERT`/`SELECT` on `incident_events` and no ownership; consider shipping events to external append-only storage. |
 | ISSUE-11 | `Secure` cookies work over plain HTTP only on `localhost` (a browser exception). | Any other host must use HTTPS. `SESSION_COOKIE_SECURE=false` exists for local testing only. | Milestone 6 deployment uses HTTPS. |
+| ISSUE-13 | The analytics "reopened" set is built from every audited reopening on each request (about 19 ms at 225k events), and PostgreSQL underestimates row counts for the JSONB status predicates, so the staff 366-day cohort uses a nested loop. | Fine at the benchmarked scale (staff 366 days: 136 ms at 50k incidents) but grows with event volume. | Re-benchmark in Milestone 6 at production-like volume; options are a partial index for reopen events, extended statistics, or a periodically refreshed summary table. |
+| ISSUE-14 | Analytics read the same primary database as the application. | Heavy dashboard use competes with incident writes. | Milestone 6: consider a read replica or response caching if load requires it. |
 
 ---
 
@@ -272,16 +328,16 @@ Every change to an incident is recorded and cannot be edited.
 - [x] Incident detail page shows a readable activity timeline.
 - [x] Tests prove: each create and update produces exactly one correct event; no-op updates produce none; actor and diff are correct; history respects permissions, including cross-reporter denial.
 
-### Milestone 3 — Analytics dashboard · Planned
+### Milestone 3 — Analytics dashboard · Implemented (pending commit)
 
 A dashboard of incident metrics computed in PostgreSQL.
 
 **Acceptance criteria**
-- [ ] Aggregation endpoint(s) computed with SQL aggregates (not by loading all rows into Python): counts by status and severity; open incidents by severity; incidents created per day or week over a selectable range; median time to resolve.
-- [ ] Results apply the same visibility rule (reporters' figures cover only their own incidents).
-- [ ] Indexes added where needed, with query plans checked for the main aggregates.
-- [ ] Frontend dashboard page with accessible charts or tables (text equivalents for charts), loading, empty and error states, and responsive layout.
-- [ ] Backend tests with seeded data assert exact aggregate values per role; frontend tests cover rendering and states.
+- [x] Aggregation endpoint(s) computed with SQL aggregates (not by loading all rows into Python): counts by status and severity; open incidents by severity; incidents created per day or week over a selectable range; median time to resolve.
+- [x] Results apply the same visibility rule (reporters' figures cover only their own incidents).
+- [x] Indexes added where needed, with query plans checked for the main aggregates.
+- [x] Frontend dashboard page with accessible charts or tables (text equivalents for charts), loading, empty and error states, and responsive layout.
+- [x] Backend tests with seeded data assert exact aggregate values per role; frontend tests cover rendering and states.
 
 ### Milestone 4 — Secure CSV export · Planned
 

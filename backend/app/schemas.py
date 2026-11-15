@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import Any
+from typing import Any, Literal
 from .models import IncidentEventAction, IncidentStatus, Severity, UserRole
 from .security import EMAIL_MAX_LENGTH, PASSWORD_MAX_LENGTH, is_valid_email, normalize_email, password_problem
 
@@ -135,3 +135,56 @@ class IncidentEventPage(BaseModel):
     offset: int
     # People referenced by assignee changes on this page, so the client can show emails.
     users: list[UserSummary]
+
+
+# ---- Analytics -----------------------------------------------------------------------
+
+class AnalyticsRange(BaseModel):
+    start_date: date
+    end_date: date
+    timezone: str
+    bucket: Literal["day", "week"]
+
+class AnalyticsTotals(BaseModel):
+    incidents: int
+    open: int
+    resolved_or_closed: int
+
+class StatusCount(BaseModel):
+    status: IncidentStatus
+    count: int
+
+class SeverityCount(BaseModel):
+    severity: Severity
+    count: int
+
+class TrendPoint(BaseModel):
+    # Inclusive calendar dates; weekly periods are clipped to the selected range.
+    period_start: date
+    period_end: date
+    created: int
+    resolved: int
+
+class SeverityResolution(BaseModel):
+    severity: Severity
+    resolved_count: int
+    median_hours: float | None
+
+class ResolutionMetrics(BaseModel):
+    resolved_count: int
+    median_hours: float | None
+    p90_hours: float | None
+    reopened_count: int
+    # Legacy incidents (no `created` audit event) resolved in range, left out of the timings.
+    excluded_legacy: int
+    by_severity: list[SeverityResolution]
+
+class AnalyticsSummary(BaseModel):
+    scope: Literal["own", "all"]
+    range: AnalyticsRange
+    totals: AnalyticsTotals
+    by_status: list[StatusCount]
+    by_severity: list[SeverityCount]
+    open_backlog_by_severity: list[SeverityCount]
+    trend: list[TrendPoint]
+    resolution: ResolutionMetrics

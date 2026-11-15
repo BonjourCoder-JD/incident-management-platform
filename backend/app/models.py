@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from typing import Any
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
@@ -65,7 +65,10 @@ class AuthSession(Base):
 
 class Incident(Base):
     __tablename__ = "incidents"
-    __table_args__ = (Index("ix_incidents_status_severity", "status", "severity"),)
+    __table_args__ = (
+        Index("ix_incidents_status_severity", "status", "severity"),
+        Index("ix_incidents_created_at", "created_at"),  # analytics date ranges (migration 0004)
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -89,7 +92,16 @@ class IncidentEvent(Base):
     are RESTRICT so an event never loses its incident or its actor.
     """
     __tablename__ = "incident_events"
-    __table_args__ = (Index("ix_incident_events_incident_id_id", "incident_id", "id"),)
+    __table_args__ = (
+        Index("ix_incident_events_incident_id_id", "incident_id", "id"),
+        # First-resolution lookups for analytics (migration 0004); predicate matches analytics._resolution_event().
+        Index(
+            "ix_incident_events_first_resolution",
+            "incident_id",
+            "created_at",
+            postgresql_where=text("(changes -> 'status' ->> 'to') IN ('resolved', 'closed')"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="RESTRICT"), nullable=False)

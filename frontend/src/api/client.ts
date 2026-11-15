@@ -1,4 +1,6 @@
 import type {
+  AnalyticsParams,
+  AnalyticsSummary,
   Incident,
   IncidentCreate,
   IncidentEventPage,
@@ -189,6 +191,11 @@ export function updateIncident(id: number, changes: IncidentUpdate): Promise<Inc
 export function listIncidentEvents(id: number, params: { limit: number; offset: number }, signal?: AbortSignal): Promise<IncidentEventPage> {
   const query = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset) });
   return request<IncidentEventPage>(`/incidents/${encodeURIComponent(String(id))}/events?${query.toString()}`, { signal });
+}
+
+export function getAnalyticsSummary(params: AnalyticsParams, signal?: AbortSignal): Promise<AnalyticsSummary> {
+  const query = new URLSearchParams({ from: params.from, to: params.to, tz: params.tz });
+  return request<AnalyticsSummary>(`/analytics/summary?${query.toString()}`, { signal });
 }
 
 export async function checkHealth(signal?: AbortSignal): Promise<boolean> {

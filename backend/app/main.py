@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 import os
 
+from .analytics import router as analytics_router
 from .auth import router as auth_router
 from .incidents import router as incidents_router
 from .users import router as users_router
@@ -14,6 +15,7 @@ app = FastAPI(title="Incident Management API", version="0.3.0")
 app.include_router(auth_router)
 app.include_router(incidents_router)
 app.include_router(users_router)
+app.include_router(analytics_router)
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg://incident:incident@db:5432/incidents")
 
 

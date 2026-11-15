@@ -6,6 +6,7 @@ import { Alert, EmptyState, LoadingState } from './components/ui';
 import { FlashProvider } from './flash';
 import { AccountPage } from './pages/AccountPage';
 import { CreateIncidentPage } from './pages/CreateIncidentPage';
+import { DashboardPage } from './pages/DashboardPage';
 import { IncidentDetailPage } from './pages/IncidentDetailPage';
 import { IncidentListPage } from './pages/IncidentListPage';
 import { LoginPage } from './pages/LoginPage';
@@ -66,6 +67,7 @@ function Layout({ user, children }: { user?: User; children: ReactNode }) {
   const navItems = user
     ? [
         { to: '/', label: permissions.canTriage(user) ? 'Incidents' : 'My incidents', active: pathname === '/' || pathname.startsWith('/incidents') },
+        { to: '/dashboard', label: permissions.canTriage(user) ? 'Dashboard' : 'My dashboard', active: pathname === '/dashboard' },
         ...(permissions.canManageUsers(user) ? [{ to: '/users', label: 'Users', active: pathname === '/users' }] : []),
       ]
     : [];
@@ -118,6 +120,8 @@ function RouteView({ route, user }: { route: Route; user: User }) {
       return permissions.canManageUsers(user) ? <UsersPage /> : <Forbidden />;
     case 'account':
       return <AccountPage />;
+    case 'dashboard':
+      return <DashboardPage search={route.search} />;
     case 'notFound':
       return <EmptyState title="Page not found" action={<Link to="/" className="button button-secondary">Back to incidents</Link>}>This page does not exist.</EmptyState>;
   }

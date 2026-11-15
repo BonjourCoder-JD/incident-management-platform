@@ -8,6 +8,7 @@ export type Route =
   | { name: 'detail'; id: number }
   | { name: 'users' }
   | { name: 'account' }
+  | { name: 'dashboard'; search: URLSearchParams }
   | { name: 'notFound' };
 
 const NAVIGATE_EVENT = 'app:navigate';
@@ -18,6 +19,7 @@ export function parseRoute(pathname: string, search: string): Route {
   if (path === '/incidents/new') return { name: 'new' };
   if (path === '/users') return { name: 'users' };
   if (path === '/account') return { name: 'account' };
+  if (path === '/dashboard') return { name: 'dashboard', search: new URLSearchParams(search) };
   const match = /^\/incidents\/([1-9]\d{0,9})$/.exec(path);
   if (match) {
     const id = Number(match[1]);
