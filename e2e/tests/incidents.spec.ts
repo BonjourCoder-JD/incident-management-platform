@@ -97,7 +97,18 @@ test.describe('Incidents', () => {
   test('the first Tab stop is the skip link', async ({ page, makeUser }) => {
     await signIn(page, await makeUser('reporter'));
     await page.goto('/incidents/new');
+    // Wait until the page has rendered: page.goto resolves on the load event, which can precede React's
+    // first render, and a Tab pressed before then focuses nothing (CI run 43724759395).
+    await expect(page.getByRole('heading', { name: 'Report an incident' })).toBeVisible();
     await page.keyboard.press('Tab');
+    // On failure, report which element actually received focus.
+    await expect.poll(
+      () => page.evaluate(() => {
+        const el = document.activeElement;
+        return el ? `${el.tagName.toLowerCase()}: ${(el.textContent ?? '').trim().slice(0, 40)}` : 'nothing';
+      }),
+      { message: 'element focused by the first Tab' },
+    ).toBe('a: Skip to content');
     await expect(page.getByRole('link', { name: 'Skip to content' })).toBeFocused();
   });
 
