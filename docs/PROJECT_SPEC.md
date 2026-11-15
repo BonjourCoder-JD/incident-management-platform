@@ -1,6 +1,6 @@
 # Project Specification — Security Incident Management Platform
 
-Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed · Milestone 4 (secure CSV export) complete — commit `02eba64`, CI run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) passed
+Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed · Milestone 4 (secure CSV export) complete — commit `02eba64`, CI run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) passed · Milestone 5 (end-to-end tests) implemented and verified locally, **not yet committed** · Roadmap expanded on 2026-11-15 (Milestones 5, 5A, 5B, 5C, 6 and a final presentation, all **Planned**)
 
 A full-stack application for reporting, triaging and resolving security incidents. It is intended to be employer-ready: working end to end, tested automatically, secure by default, and documented.
 
@@ -30,6 +30,7 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 | API | FastAPI, Pydantic v2 schemas | `backend/app/main.py`, `auth.py`, `users.py`, `incidents.py`, `schemas.py` |
 | Audit trail | Append-only `incident_events` table, written in the same transaction as each incident change | `backend/app/audit.py`, migration `0003` |
 | Analytics | PostgreSQL aggregates in one read-only snapshot; React dashboard with dependency-free SVG/CSS charts | `backend/app/analytics.py`, migration `0004`; `frontend/src/pages/DashboardPage.tsx`, `frontend/src/components/dashboard/` |
+| End-to-end tests | Playwright (Chromium, 1 worker, no retries) against a disposable Compose project `imp-e2e` with random per-run passwords; axe accessibility checks | `e2e/` (`run.sh`, `compose.e2e.yaml`, `support/`, `tests/`); CI job "End-to-end tests" |
 | CSV export | Streamed, formula-safe CSV from a read-only snapshot; every request recorded in an append-only table | `backend/app/exports.py`, migration `0005`; `frontend/src/components/ExportCsvButton.tsx` |
 | Security | Argon2id hashing (`argon2-cffi`), session tokens, login rate limiting | `backend/app/security.py`, `auth.py`, `config.py` |
 | Persistence | SQLAlchemy 2 ORM, Alembic migrations | `backend/app/models.py`, `database.py`, `backend/migrations/` |
@@ -219,6 +220,37 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 
 ## Completed functionality
 
+### Milestone 5 — Permanent Playwright end-to-end tests
+
+Implemented and verified locally on 2026-11-15. **Not yet committed**; CI confirmation will be recorded here after the push.
+
+**Design.** `e2e/run.sh` (used by CI and locally) starts Compose project `imp-e2e` with `e2e/compose.e2e.yaml` (frontend on `127.0.0.1:15173`, API unpublished, `EXPORT_MAX_ROWS=5`), generates random database and admin passwords per run (masked in CI, never written to disk, taking precedence over a developer `.env`), migrates, creates the admin with the bootstrap command, seeds two synthetic legacy incidents, runs Playwright, and always removes the stack. Before any `down --volumes` it verifies that every volume labelled for the project is named `imp-e2e_*`; development volumes belong to a different project and are never in scope. Tests create their own synthetic users (random passwords, `example.com` addresses) and data, so they are independent of order and of each other. Selectors are roles, labels and visible text; waits are web-first assertions with no fixed sleeps; time zone is fixed to Europe/London. In CI, traces and the HTML report are off (they can contain request bodies and typed values); only failure screenshots, page snapshots (`error-context.md`) and the backend log are uploaded, for 7 days.
+
+| Functionality | Status | Evidence |
+|---|---|---|
+| Sign-in and sign-out, generic error, deep link kept, 401 without session, 403 without CSRF token, hardened cookie and no web storage, role change and deactivation end sessions, password change signs out other devices, login rate limiting, admin account management without self-demotion | **Verified (local)** | `e2e/tests/auth.spec.ts` (8 tests) |
+| Create with validation, filters and pagination in the URL with Back, responder status/edit/assignment visible to the reporter, not-found routes, HTML shown as text, skip link, no-op saves | **Verified (local)** | `e2e/tests/incidents.spec.ts` (7 tests) |
+| Reporter UI limits, API refusals (403/422), cross-reporter and legacy 404s for detail, update and history, staff see everything | **Verified (local)** | `e2e/tests/authorization.spec.ts` (4 tests) |
+| History entries with correct actors, collapsed description diff, "Show older", legacy explanation, HTML as text, no-op and spoofed-actor protection | **Verified (local)** | `e2e/tests/history.spec.ts` (5 tests) |
+| Dashboard: exact reporter figures and isolation, multi-field resolution counted, legacy exclusion explained, presets/custom ranges/range errors in the URL, keyboard tooltip and table | **Verified (local)** | `e2e/tests/dashboard.spec.ts` (4 tests) |
+| CSV export: BOM, header, own rows only, formula neutralised, quoting and Unicode, headers, filters and filename, exactly-at-limit allowed and over-limit refused | **Verified (local)** | `e2e/tests/export.spec.ts` (3 tests) |
+| axe WCAG 2.1 A/AA scan (fails on serious/critical) of sign-in, list, detail, create with errors, dashboard, users and account pages in light and dark themes; no horizontal scrolling at 390 px | **Verified (local)** | `e2e/tests/accessibility.spec.ts` (7 tests) |
+| Every test fails on unexpected browser console errors | **Verified (local)** | automatic fixture in `e2e/support/fixtures.ts` |
+
+**Results (local, 2026-11-15):** 38 tests; **three consecutive runs, 38/38 each**, on freshly built stacks; about 1.1 minutes of test time and 169–170 s per run including build and teardown. Development containers and volumes were unchanged before and after (volume list compared; database container identical).
+
+**Deliberate-break checks:** four application protections were removed in scratch copies and the suite rerun: reporter visibility (8 tests failed), CSV formula guard (1), CSRF check (1), export limit (1). All four caught.
+
+**Failure path:** a deliberately failing local test produced a screenshot, page snapshot, local trace and backend log; `run.sh` exited non-zero and still removed the stack's containers, volume and network; no passwords, session cookies, CSRF tokens or bootstrap secrets appeared in the files CI would upload.
+
+**Defects found and fixed (application changes, reported separately):**
+- **DEF-1 (WCAG 1.4.3 contrast, serious):** light-theme "High" severity and "Admin" role badges used `#c2410c`, 4.34:1 (4.02:1 on the detail page) against the badge tint, below 4.5:1. Changed the light-theme `--sev-high` to `#9a3412`. Dark theme was already compliant.
+- **DEF-2 (WCAG 2.5.3 label in name, serious):** the header account link's `aria-label` ("Account settings for <email>") replaced its visible text (email and role). Removed the `aria-label`; a visually hidden "Account settings for" now precedes the visible text, so the accessible name is "Account settings for <email> <Role>". The frontend test asserting the name was updated accordingly.
+
+**Also found during implementation:** `@axe-core/playwright` accepts any `playwright-core`, so npm installed a second, two-day-old `playwright-core` 1.65.1 next to 1.64.1. An `overrides` entry pins a single 1.64.1.
+
+**Dependencies (dev-only, `e2e/` package):** `@playwright/test` 1.64.1, `@axe-core/playwright` 4.14.0, `@types/node` 24.19.2, `typescript` 5.8.3; `npm audit` 0 vulnerabilities.
+
 ### Milestone 4 — Secure CSV export
 
 Committed as `02eba64d892cf5a5ad88e2dbe34be122728d9c7c` on 2026-11-15 and verified in GitHub Actions run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) on the first attempt: Backend tests, Migration round trip (upgrade through `0005`, downgrade to base, schema removed, re-upgrade, `alembic check`, bootstrap command), Frontend tests and build, and Docker images all **success**.
@@ -333,7 +365,7 @@ Committed as `1ae693b52ed41bbcc274df03fcfa8d1ec6a64e22` on 2026-11-15 and verifi
 | CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | Latest: GitHub Actions run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) on `02eba64` (Milestone 4): all four jobs **success**. Milestone 3: run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) on `7240e3a`: all four jobs **success**. Milestone 2: run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) on `ec3ed2e`: all four jobs **success**. Milestone 1: run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
 | Supply chain | Lockfile with `npm ci`; read-only CI token; no repository secrets | **Implemented** | `frontend/package-lock.json`, `ci.yml` |
 
-**Test counts:** 165 backend (pytest), 91 frontend (Vitest + React Testing Library). After Milestone 3: 122 and 78. After Milestone 2: 98 and 68. After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
+**Test counts:** 165 backend (pytest), 91 frontend (Vitest + React Testing Library), 38 end-to-end (Playwright). After Milestone 3: 122 and 78. After Milestone 2: 98 and 68. After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
 
 The manual browser checks were one-off Playwright scripts, not part of the repository or CI. Milestone 5 makes them permanent.
 
@@ -359,12 +391,39 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 | ISSUE-14 | Analytics read the same primary database as the application. | Heavy dashboard use competes with incident writes. | Milestone 6: consider a read replica or response caching if load requires it. |
 | ISSUE-15 | CSV formula-injection defence has spreadsheet-specific limits: the leading apostrophe is hidden by Excel but may appear as a visible character in other tools (some LibreOffice and Google Sheets import paths, text editors); it protects the exported file only, not data copied out of it or re-saved without the prefix; and it targets the OWASP trigger set (`= + - @`, tab, CR, LF and their full-width forms, also after leading whitespace). | A spreadsheet user could still be tricked if they remove the apostrophe or paste the cell elsewhere. | Document for users in Milestone 6; revisit if a target application with other triggers is adopted. |
 | ISSUE-16 | CSV exports are capped per request (10,000 rows) and every request is recorded, but there is no per-user rate limit, alerting, or screen for reviewing `incident_exports`. | Repeated exports are detectable only by querying the database. | Milestone 6: export rate limiting and an admin view or alert for unusual export volume. |
+| ISSUE-17 | The end-to-end suite runs in Chromium only, against the Vite development server, and does not cover API-unavailable states or exact theme colours (covered by frontend unit tests and screenshots instead). | Browser-specific or production-build regressions would not be caught end to end. | Milestone 6: run the suite against the production frontend image; consider Firefox and WebKit projects. |
 
 ---
 
 ## Remaining milestones
 
 Milestones are delivered in order, each as a small, separately approved change with passing CI. **Each milestone keeps all earlier tests passing and adds tests for its own behaviour.** Milestones 2–4 must apply the same visibility rule as incident endpoints (reporters: own incidents only) and include negative tests for it.
+
+### Approved sequence (2026-11-15)
+
+| Order | Milestone | Status |
+|---|---|---|
+| 1–4 | Authentication/RBAC, audit trail, analytics dashboard, secure CSV export | **Complete** (see *Completed functionality*) |
+| 5 | Permanent Playwright end-to-end tests in GitHub Actions | Implemented, verified locally (pending commit and CI) |
+| 5A | Incident comments and internal-only responder notes | Planned |
+| 5B | SLA tracking, response/resolution deadlines, overdue indicators and escalation | Planned |
+| 5C | AI-assisted incident triage with human approval | Planned |
+| 6 | Production hardening, observability, monitoring and deployment | Planned |
+| — | Final presentation: live demo, sample data, screenshots, architecture diagram, README, 60–90 s walkthrough | Planned |
+
+Technical additions listed under planned milestones are **anticipated designs, not implemented features**. Each is refined, and may change, in that milestone's approved plan.
+
+### Deployable-core checkpoint
+
+Commit `198f6be` (Milestones 1–4, CI run [43717555312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717555312) passed) is the **deployable core**: authentication and RBAC, incident create/read/update, the append-only audit trail, analytics and secure CSV export, with backend, frontend, migration and Docker checks in CI. It is functionally complete but **not yet production-hardened** (see ISSUE-3 to ISSUE-16, largely addressed in Milestone 6). Later milestones build on this core and must not regress it: its tests stay green, its security properties stay intact, and its migrations stay reversible.
+
+### Approval gates and standing requirements (all remaining milestones)
+
+- **Gates:** plan → explicit approval → implementation → local verification report → explicit approval → commit and push → CI verified → separate documentation commit recording the CI run (evidence moves from "Verified (local)" to "Verified" only after CI passes). No milestone starts without approval.
+- **Authorization:** every new read path applies the incident visibility rule (`_visible_to`), with cross-reporter negative tests; authorization is enforced in the API, not only the UI.
+- **Writes:** every new state-changing endpoint requires authentication and the CSRF token (covered by the automatic route-inventory test); changes to incidents are recorded in the append-only audit trail in the same transaction.
+- **Data handling:** no secrets, credentials or real personal data in the repository, fixtures, logs or CI artifacts; user-supplied text is rendered as text; new migrations are reversible and pass `alembic check`.
+- **Verification:** deliberate-break checks on new security and correctness rules; dependency audits; no new dependency without justification (pinned, at least two weeks old).
 
 ### Milestone 2 — Audit trail · Complete (`7838f9c`, `ec3ed2e`)
 
@@ -403,18 +462,73 @@ Export the incidents a user is allowed to see, using the active filters.
 - [x] Tests cover filters, permissions (including cross-reporter denial), escaping, injection neutralisation and headers.
 - [x] Every export request recorded in an append-only table (approved addition).
 
-### Milestone 5 — Playwright end-to-end tests in CI · Planned
+### Milestone 5 — Playwright end-to-end tests in CI · Implemented (pending commit)
 
-Turn the manual browser verification into a permanent, automated suite.
+Turn the manual browser verification into a permanent, automated suite. Plan approved on 2026-11-15; see *Completed functionality* for the local verification.
 
 **Acceptance criteria**
-- [ ] `@playwright/test` suite in the repository covering: login per role, create, list with filters and pagination, detail edit and status change, audit timeline, dashboard, CSV export, and permission denials.
-- [ ] Runs against the full Docker Compose stack with a disposable database seeded by fixtures (admin created with the bootstrap command), never a developer database.
-- [ ] New CI job that runs the suite and uploads traces and screenshots on failure; no repository secrets needed.
-- [ ] Includes mobile-viewport checks for no horizontal scrolling, and a basic automated accessibility scan of the main pages.
-- [ ] Reliable: no fixed sleeps; passes repeatedly in CI.
+- [x] `@playwright/test` suite in the repository covering: login per role, create, list with filters and pagination, detail edit and status change, audit timeline, dashboard, CSV export, and permission denials.
+- [x] Runs against the full Docker Compose stack with a disposable database seeded by fixtures (admin created with the bootstrap command), never a developer database.
+- [x] New CI job that runs the suite and uploads failure evidence; no repository secrets needed. (Approved refinement: screenshots, page snapshots and backend logs only; traces are local-only because they can contain request bodies.)
+- [x] Includes mobile-viewport checks for no horizontal scrolling, and a basic automated accessibility scan of the main pages.
+- [ ] Reliable: no fixed sleeps; passes repeatedly in CI. (Three consecutive local runs passed; CI confirmation pending.)
 
-### Milestone 6 — Production hardening, deployment and final documentation · Planned
+### Milestone 5A — Incident comments and internal-only responder notes · Planned
+
+Discussion on an incident: public comments that the reporter can see, and internal notes visible only to responders and admins.
+
+**Anticipated technical additions (not implemented)**
+- `incident_comments` table (migration): incident, author (from the session), body (length-limited text), visibility `public` or `internal`, timestamps; edit and delete policy decided in the plan (for example, edits recorded rather than overwritten).
+- Endpoints such as `GET/POST /incidents/{id}/comments`, filtered by role in the query itself.
+- Comment activity recorded in the audit trail (new event actions or a linked record) with the authenticated actor.
+- Detail-page "Discussion" section, with internal notes visibly marked for staff.
+
+**Acceptance criteria**
+- [ ] Reporters can read and add public comments on their own incidents only; responders and admins can read and add both kinds on any incident.
+- [ ] Internal notes never reach a reporter through any path: comment list, incident detail, history, analytics, CSV export or error messages (negative tests per path, including end-to-end).
+- [ ] Author identity always from the session; bodies rendered as text; size limits enforced; CSRF on writes.
+- [ ] Comment creation (and any edit or delete allowed by the approved policy) is auditable with actor and time.
+- [ ] Backend, frontend and end-to-end tests, including cross-reporter isolation and deliberate-break checks.
+
+### Milestone 5B — SLA tracking, deadlines, overdue indicators and escalation · Planned
+
+Response and resolution targets per severity, visible deadlines, overdue status and escalation.
+
+**Anticipated technical additions (not implemented)**
+- SLA policy per severity (response target and resolution target), stored in a table or configuration and changeable only by admins; definitions of "responded" (for example first triage action by staff) and "resolved" reuse the audit trail, as the analytics do.
+- Deadlines derived from `created_at` and the policy; overdue and breached states computed in SQL so list filters, dashboard figures and exports agree.
+- Escalation when a deadline passes (for example raising an escalation level and notifying or highlighting for staff), recorded in the audit trail. This needs a system-actor design, because audit events currently require a human actor; the approach is decided in the plan.
+- Overdue indicators in the list and detail page, an "overdue" filter, SLA compliance figures on the dashboard, and SLA columns in the CSV export.
+- A testable clock (injectable "now") so deadline and escalation tests are deterministic.
+
+**Acceptance criteria**
+- [ ] SLA targets per severity are documented, configurable by admins only, and changes are auditable.
+- [ ] Deadlines, overdue and breached states are correct at boundaries (exactly at the deadline, after a status change, after reopening) and computed in UTC with display in the viewer's time zone.
+- [ ] Escalation happens once per breach, is idempotent and is recorded with its cause.
+- [ ] Visibility rules apply to every SLA figure, filter and export (cross-reporter tests).
+- [ ] Unit, API, end-to-end and deliberate-break tests; performance checked on the benchmark dataset.
+
+### Milestone 5C — AI-assisted incident triage with human approval · Planned
+
+Suggested severity and triage notes for new incidents, which a responder reviews before anything changes.
+
+**Anticipated technical additions (not implemented)**
+- A triage service that sends incident text to a language model and requests **structured output** validated against a strict schema (for example suggested severity from the existing enum, a short rationale, suggested next steps, possible duplicate incident IDs from the caller's visible set).
+- Suggestions stored separately from the incident, with model identifier, prompt version, timestamps and validation result; nothing is applied automatically.
+- A staff-only review panel: accept (applying changes through the normal, audited update path with the human as actor), edit, or reject.
+- Provider API key supplied only through a secret store or environment variable, never the repository; the feature disabled when no key is configured; tests use a deterministic fake model.
+- A small, synthetic, version-controlled evaluation dataset (for example 30–50 labelled incidents, including prompt-injection attempts) with a script reporting agreement with human labels, invalid-output rate and injection resistance.
+
+**Security and acceptance criteria**
+- [ ] Incident text is treated as untrusted input: the model has no tools, database access or ability to act; output outside the schema or allowed values is rejected; prompt-injection cases in the evaluation set do not change behaviour beyond a schema-valid suggestion.
+- [ ] Human approval is required for every change; accepted suggestions are recorded in the audit trail with the approving user as actor and a reference to the suggestion.
+- [ ] Data minimisation: only fields needed for triage are sent; reporters cannot see staff-only data through suggestions; visibility rules apply to duplicate detection.
+- [ ] Timeouts, rate limits and a cost ceiling; failures degrade gracefully to manual triage.
+- [ ] Evaluation results recorded in this document; CI uses the fake model only (no secrets or paid calls in CI).
+
+### Milestone 6 — Production hardening, observability, monitoring and deployment · Planned
+
+The original hardening and deployment criteria below are unchanged; observability and monitoring are added. README improvements, screenshots and the architecture diagram move to the *Final presentation*.
 
 **Acceptance criteria**
 - [ ] Production frontend image: static build served by a minimal web server that also proxies `/api`; no dev server in production.
@@ -426,7 +540,21 @@ Turn the manual browser verification into a permanent, automated suite.
 - [ ] Structured logging without secrets or personal data; consistent error responses.
 - [ ] Dependency review and CI dependency/vulnerability scanning; resolve ISSUE-3.
 - [ ] Documented deployment to a chosen host, with a deploy workflow that uses a protected environment for any secrets.
-- [ ] Final documentation: README with architecture diagram, screenshots, setup, testing, security model and roles, API reference, and a short "design decisions" section.
+- [ ] Final documentation: README with architecture diagram, screenshots, setup, testing, security model and roles, API reference, and a short "design decisions" section. *(Delivered with the Final presentation.)*
+- [ ] Observability: structured logs with request IDs (no secrets or personal data), liveness and readiness endpoints, and application metrics (request rate, latency and errors per route; database pool; export and analytics counts).
+- [ ] Evaluate **Prometheus** (metrics endpoint and scraping), **Grafana** (provisioned dashboards) and **OpenTelemetry** (traces across FastAPI and SQLAlchemy); record the decision and adopt what fits the chosen hosting, with the reasons documented.
+- [ ] Monitoring and alerting for availability, error rate and (after Milestone 5B) SLA breaches, with a short runbook.
+- [ ] Re-run the analytics and export benchmarks at production-like volume (ISSUE-13) and decide on read replicas or caching (ISSUE-14).
+
+### Final presentation · Planned
+
+A short, verifiable showcase of the finished platform.
+
+**Acceptance criteria**
+- [ ] Live demo deployment with **synthetic sample data** generated by a committed script (no real data); demo accounts per role with a published reset policy; no admin credentials published.
+- [ ] Screenshots of the main screens (light and dark, desktop and mobile) and an architecture diagram kept in the repository.
+- [ ] README improvements: overview, architecture, security model and roles, setup, testing, API reference, design decisions and links to CI and this specification.
+- [ ] A 60–90 second recorded walkthrough (script or storyboard committed), with captions, showing sign-in, triage, history, dashboard and export, using only synthetic data.
 
 ---
 
@@ -436,3 +564,4 @@ Turn the manual browser verification into a permanent, automated suite.
 - New behaviour has tests, including failure and permission paths.
 - No secrets, generated artifacts or unrelated files are committed.
 - Documentation, including this file's status tables, is updated in the same milestone.
+- The milestone followed the approval gates above; evidence is marked "Verified" only after CI passes.

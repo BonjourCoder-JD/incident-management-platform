@@ -159,3 +159,47 @@ jobs:
         run: docker build --tag incident-backend:ci ./backend
       - name: Build frontend image
         run: docker build --tag incident-frontend:ci ./frontend
+
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: e2e
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: Install test dependencies
+        run: npm ci
+      - name: Type check the tests
+        run: npm run typecheck
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run end-to-end tests against a disposable stack
+        # run.sh generates and masks per-run passwords, starts the "imp-e2e" Compose project,
+        # migrates, bootstraps an admin, runs Playwright and always removes the stack.
+        run: bash ./run.sh
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-failure-evidence
+          # Screenshots, page snapshots and backend logs only: no traces, reports, auth state or credentials.
+          path: |
+            e2e/test-results/**/*.png
+            e2e/test-results/**/error-context.md
+            e2e/test-results/backend.log
+          retention-days: 7
+          if-no-files-found: ignore

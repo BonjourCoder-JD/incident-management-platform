@@ -1,0 +1,20 @@
+{
+  "name": "incident-management-e2e",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end tests run against a disposable Docker Compose stack (see run.sh).",
+  "scripts": {
+    "e2e": "bash ./run.sh",
+    "e2e:docker": "bash ./run.sh --in-docker",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "typescript": "5.8.3"
+  },
+  "overrides": {
+    "playwright-core": "1.64.1"
+  }
+}

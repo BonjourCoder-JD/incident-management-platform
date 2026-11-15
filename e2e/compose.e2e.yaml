@@ -1,0 +1,13 @@
+# Override for the disposable end-to-end stack. Only ever used with `docker compose -p imp-e2e`
+# through e2e/run.sh, so its database volume is imp-e2e_postgres_data, never the development one.
+services:
+  backend:
+    # The browser reaches the API through the frontend's /api proxy, as real users do.
+    ports: !reset []
+    environment:
+      # Small limit so the over-limit export path is exercised with a handful of incidents.
+      EXPORT_MAX_ROWS: "5"
+  frontend:
+    # A different host port, so a running development stack on 5173 is unaffected.
+    ports: !override
+      - "127.0.0.1:15173:5173"

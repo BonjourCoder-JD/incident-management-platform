@@ -37,6 +37,24 @@ docker compose up --build -d backend frontend
 
 The tests use the Compose PostgreSQL database. Each test runs in a transaction that is rolled back, so no test records or test accounts are kept. CI runs the same suite against a disposable database.
 
+## End-to-end tests
+
+The Playwright suite in `e2e/` runs against a **disposable** stack: Compose project `imp-e2e` with its own database volume, the frontend on `127.0.0.1:15173`, the API unpublished, and random passwords generated for every run. It never touches the development database, and the stack is removed afterwards (the script first checks that every volume it removes belongs to `imp-e2e`).
+
+```sh
+# With Node.js 24 installed locally
+cd e2e && npm ci && npx playwright install chromium && cd ..
+bash e2e/run.sh
+
+# Without a local Node.js install: run Playwright inside its official Docker image
+bash e2e/run.sh --in-docker
+
+# Extra arguments go to Playwright, for example a single file
+bash e2e/run.sh --in-docker tests/export.spec.ts
+```
+
+A local run takes about 3 minutes (stack build included). Failure screenshots, page snapshots and traces stay in `e2e/test-results/` (git-ignored); the HTML report is written to `e2e/playwright-report/`. In CI, only screenshots, page snapshots and backend logs are uploaded on failure.
+
 ## Accounts and sign-in
 
 There is no public sign-up. Create the first admin from the command line, then create everyone else from the **Users** page in the web interface.

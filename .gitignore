@@ -230,3 +230,10 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 *.local
+
+# End-to-end tests (output, local auth state; never committed)
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/
+e2e/.auth/
+e2e/.cache/
