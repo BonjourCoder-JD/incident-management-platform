@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: the workflow only needs to read the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-tests:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      # Disposable database that exists only for this job.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: incident
+          POSTGRES_PASSWORD: ci-only-disposable
+          POSTGRES_DB: incidents_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U incident -d incidents_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://incident:ci-only-disposable@localhost:5432/incidents_test
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Apply migrations
+        run: alembic upgrade head
+      - name: Check models match migrations
+        run: alembic check
+      - name: Run tests
+        run: python -m pytest -v
+
+  migrations:
+    name: Migration round trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      # Separate disposable database so downgrades never affect the test job.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: incident
+          POSTGRES_PASSWORD: ci-only-disposable
+          POSTGRES_DB: incidents_migrations
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U incident -d incidents_migrations"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://incident:ci-only-disposable@localhost:5432/incidents_migrations
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Upgrade to head
+        run: alembic upgrade head
+      - name: Downgrade to base
+        run: alembic downgrade base
+      - name: Confirm schema was removed
+        run: |
+          python - <<'EOF'
+          from sqlalchemy import inspect
+          from app.database import engine
+          inspector = inspect(engine)
+          tables = set(inspector.get_table_names()) - {"alembic_version"}
+          enums = [e["name"] for e in inspector.get_enums()]
+          assert not tables, f"tables left after downgrade: {tables}"
+          assert not enums, f"enum types left after downgrade: {enums}"
+          print("downgrade removed all application tables and enum types")
+          EOF
+      - name: Upgrade to head again
+        run: alembic upgrade head
+      - name: Check models match migrations
+        run: alembic check
+
+  frontend-build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type check and production build
+        run: npm run build
+
+  docker-images:
+    name: Docker images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build backend image
+        run: docker build --tag incident-backend:ci ./backend
+      - name: Build frontend image
+        run: docker build --tag incident-frontend:ci ./frontend
