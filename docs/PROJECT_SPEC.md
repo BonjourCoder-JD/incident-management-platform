@@ -1,6 +1,6 @@
 # Project Specification — Security Incident Management Platform
 
-Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete
+Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed
 
 A full-stack application for reporting, triaging and resolving security incidents. It is intended to be employer-ready: working end to end, tested automatically, secure by default, and documented.
 
@@ -135,7 +135,7 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 
 ### Milestone 1 — Authentication and RBAC
 
-Implemented and verified locally on 2026-11-15; CI confirmation is recorded below when the milestone is pushed.
+Committed as `1ae693b52ed41bbcc274df03fcfa8d1ec6a64e22` on 2026-11-15 and verified in GitHub Actions run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665): all four jobs passed (details in the CI row below).
 
 | Functionality | Status | Evidence |
 |---|---|---|
@@ -175,7 +175,7 @@ Implemented and verified locally on 2026-11-15; CI confirmation is recorded belo
 | Frontend | Incident list with filters and pagination kept in the URL; create form; detail with status change and editing | **Verified** | page tests; manual browser checks |
 | Frontend | Loading, empty, error and success states; API status indicator | **Verified** | page tests; manual check with backend stopped |
 | Frontend | Responsive layout, light/dark themes, keyboard skip link; user-entered HTML rendered as text | **Verified (manual)** | Browser checks, 2026-11-14 and 2026-11-15 |
-| CI | Backend tests on a disposable PostgreSQL; migration round trip; frontend tests, type check and build; Docker image builds | **Verified** | GitHub Actions run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) (pre-Milestone 1) |
+| CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | GitHub Actions run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
 | Supply chain | Lockfile with `npm ci`; read-only CI token; no repository secrets | **Implemented** | `frontend/package-lock.json`, `ci.yml` |
 
 **Test counts:** 72 backend (pytest), 60 frontend (Vitest + React Testing Library). Before Milestone 1: 6 and 35.
