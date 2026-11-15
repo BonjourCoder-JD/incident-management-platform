@@ -32,6 +32,16 @@ export function makeIncident(overrides: Partial<Incident> = {}): Incident {
   };
 }
 
+/**
+ * A promise the test resolves itself. Use it to hold a mocked response until the test has
+ * checked the loading state, so loading assertions do not depend on timing.
+ */
+export function deferred() {
+  let release!: () => void;
+  const promise = new Promise<void>(resolve => { release = resolve; });
+  return { promise, release };
+}
+
 export function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } });
 }

@@ -2,7 +2,7 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { IncidentEvent, IncidentEventPage } from '../api/types';
-import { eventCalls, jsonResponse, makeIncident, makeUser, mockApi, renderAt } from '../test/helpers';
+import { deferred, eventCalls, jsonResponse, makeIncident, makeUser, mockApi, renderAt } from '../test/helpers';
 
 const alex = { id: 201, email: 'responder@example.com' };
 const sam = { id: 202, email: 'second.responder@example.com' };
@@ -76,9 +76,16 @@ describe('Incident history', () => {
   });
 
   it('shows loading, then an empty state for incidents with no recorded history', async () => {
-    mockApi(serveIncident, { events: page([], { users: [] }) });
+    const response = deferred();
+    mockApi(serveIncident, {
+      events: async () => {
+        await response.promise;
+        return jsonResponse(200, page([], { users: [] }));
+      },
+    });
     const history = await openHistory();
     expect(within(history).getByText('Loading history…')).toBeInTheDocument();
+    response.release();
     expect(await within(history).findByText('No history recorded yet.')).toBeInTheDocument();
     expect(within(history).getByText(/Earlier changes to this incident were not tracked/)).toBeInTheDocument();
   });

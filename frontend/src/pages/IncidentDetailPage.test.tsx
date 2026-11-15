@@ -2,7 +2,7 @@ import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { Incident } from '../api/types';
-import { apiCalls, jsonResponse, makeIncident, mockApi, renderAt } from '../test/helpers';
+import { apiCalls, deferred, jsonResponse, makeIncident, mockApi, renderAt } from '../test/helpers';
 
 /** In-memory incident that GET returns and PATCH updates. */
 function serveIncident(initial: Incident) {
@@ -23,10 +23,16 @@ function patchBodies(fetchMock: ReturnType<typeof mockApi>) {
 
 describe('Incident detail', () => {
   it('shows the incident', async () => {
-    serveIncident(makeIncident({ id: 5, title: 'Data exfiltration', description: 'Line one\nLine two', severity: 'critical', assignee_id: 201, assignee: { id: 201, email: 'responder@example.com' } }));
+    const incident = makeIncident({ id: 5, title: 'Data exfiltration', description: 'Line one\nLine two', severity: 'critical', assignee_id: 201, assignee: { id: 201, email: 'responder@example.com' } });
+    const response = deferred();
+    mockApi(async url => {
+      await response.promise;
+      return url.pathname === '/api/incidents/5' ? jsonResponse(200, incident) : jsonResponse(404, { detail: 'Incident not found' });
+    });
     renderAt('/incidents/5');
 
     expect(await screen.findByText('Loading incident…')).toBeInTheDocument();
+    response.release();
     expect(await screen.findByRole('heading', { name: 'Data exfiltration' })).toBeInTheDocument();
     expect(screen.getByText('Incident #5')).toBeInTheDocument();
     expect(screen.getByText('Critical')).toBeInTheDocument();
