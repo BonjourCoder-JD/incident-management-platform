@@ -1,9 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 import os
 
-app = FastAPI(title="Incident Management API", version="0.1.0")
+from .incidents import router as incidents_router
+
+app = FastAPI(title="Incident Management API", version="0.2.0")
+app.include_router(incidents_router)
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg://incident:incident@db:5432/incidents")
 
 @app.get("/health")
@@ -17,5 +20,4 @@ def database_health():
             connection.execute(text("SELECT 1"))
         return {"status": "ok"}
     except SQLAlchemyError:
-        from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="Database unavailable")
