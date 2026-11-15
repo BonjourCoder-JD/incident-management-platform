@@ -1,6 +1,7 @@
 import type {
   Incident,
   IncidentCreate,
+  IncidentEventPage,
   IncidentListParams,
   IncidentPage,
   IncidentUpdate,
@@ -183,6 +184,11 @@ export function createIncident(payload: IncidentCreate): Promise<Incident> {
 
 export function updateIncident(id: number, changes: IncidentUpdate): Promise<Incident> {
   return request<Incident>(`/incidents/${encodeURIComponent(String(id))}`, { method: 'PATCH', body: JSON.stringify(changes) });
+}
+
+export function listIncidentEvents(id: number, params: { limit: number; offset: number }, signal?: AbortSignal): Promise<IncidentEventPage> {
+  const query = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset) });
+  return request<IncidentEventPage>(`/incidents/${encodeURIComponent(String(id))}/events?${query.toString()}`, { signal });
 }
 
 export async function checkHealth(signal?: AbortSignal): Promise<boolean> {

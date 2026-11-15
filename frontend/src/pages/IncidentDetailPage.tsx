@@ -3,6 +3,7 @@ import { ApiError, getIncident, updateIncident, type FieldErrors } from '../api/
 import { STATUSES, type Incident, type IncidentStatus, type IncidentUpdate, type Severity } from '../api/types';
 import { permissions, useCurrentUser } from '../auth';
 import { IncidentFields } from '../components/IncidentFields';
+import { IncidentHistory } from '../components/IncidentHistory';
 import { useAssignees } from '../components/useAssignees';
 import { Alert, Email, EmptyState, LoadingState, SeverityBadge, StatusBadge } from '../components/ui';
 import { useFlash } from '../flash';
@@ -52,6 +53,7 @@ export function IncidentDetailPage({ id }: { id: number }) {
   const [values, setValues] = useState<IncidentFormValues | null>(null);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [saving, setSaving] = useState<'status' | 'details' | null>(null);
+  const [historyKey, setHistoryKey] = useState(0);
   const assignees = useAssignees(canTriage && editing);
 
   useEffect(() => {
@@ -101,6 +103,7 @@ export function IncidentDetailPage({ id }: { id: number }) {
       const updated = await updateIncident(incident.id, changes);
       setState({ kind: 'ready', incident: updated });
       setNotice({ tone: 'success', text: success });
+      setHistoryKey(key => key + 1);
       return true;
     } catch (error) {
       if (error instanceof ApiError) {
@@ -172,34 +175,37 @@ export function IncidentDetailPage({ id }: { id: number }) {
       </div>
 
       <div className="detail-layout">
-        <div className="card">
-          {editing && values ? (
-            <form className="form" noValidate onSubmit={handleEditSubmit} aria-label="Edit incident details">
-              <h2>Edit details</h2>
-              <IncidentFields
-                idPrefix="edit"
-                values={values}
-                errors={errors}
-                disabled={saving === 'details'}
-                assignees={assignees}
-                currentAssignee={incident.assignee}
-                onChange={setValues}
-              />
-              <div className="form-actions">
-                <button type="button" className="button button-ghost" disabled={saving === 'details'} onClick={() => { setEditing(false); setErrors({}); }}>
-                  Cancel
-                </button>
-                <button type="submit" className="button button-primary" disabled={saving === 'details'}>
-                  {saving === 'details' ? 'Saving…' : 'Save changes'}
-                </button>
-              </div>
-            </form>
-          ) : (
-            <>
-              <h2>Description</h2>
-              <p className="description">{incident.description}</p>
-            </>
-          )}
+        <div className="detail-main">
+          <div className="card">
+            {editing && values ? (
+              <form className="form" noValidate onSubmit={handleEditSubmit} aria-label="Edit incident details">
+                <h2>Edit details</h2>
+                <IncidentFields
+                  idPrefix="edit"
+                  values={values}
+                  errors={errors}
+                  disabled={saving === 'details'}
+                  assignees={assignees}
+                  currentAssignee={incident.assignee}
+                  onChange={setValues}
+                />
+                <div className="form-actions">
+                  <button type="button" className="button button-ghost" disabled={saving === 'details'} onClick={() => { setEditing(false); setErrors({}); }}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="button button-primary" disabled={saving === 'details'}>
+                    {saving === 'details' ? 'Saving…' : 'Save changes'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <h2>Description</h2>
+                <p className="description">{incident.description}</p>
+              </>
+            )}
+          </div>
+          <IncidentHistory incidentId={incident.id} refreshKey={historyKey} />
         </div>
 
         <aside className="detail-sidebar">

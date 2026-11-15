@@ -62,6 +62,8 @@ Every rule is enforced by the API; the interface only hides what a role cannot u
 
 Optional backend settings (environment variables): `SESSION_ABSOLUTE_HOURS` (default 12), `SESSION_IDLE_MINUTES` (default 120), `LOGIN_MAX_FAILURES_PER_EMAIL` (default 5), `LOGIN_MAX_FAILURES_PER_IP` (default 30), `LOGIN_FAILURE_WINDOW_SECONDS` (default 900), and `SESSION_COOKIE_SECURE` (default `true`; browsers accept secure cookies on `http://localhost`, so only set `false` for other plain-HTTP test hosts).
 
+**Audit trail:** every incident creation and change is recorded with the signed-in user, the time and the before/after values, in the same transaction as the change. Records cannot be edited or deleted through the app, and a database trigger blocks `UPDATE`, `DELETE` and `TRUNCATE` on them (see the limits in [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md#audit-trail-design-milestone-2)). History starts when migration `0003` is applied; earlier changes are not backfilled.
+
 **Upgrading an existing database:** migration `0002` keeps every incident. Incidents created before accounts existed have no reporter and are visible to responders and admins only. Their old numeric assignee IDs are cleared, because no users existed for them to refer to.
 
 ## Frontend
@@ -71,6 +73,7 @@ The web interface at http://localhost:5173 asks you to sign in, then lets you:
 - **Browse incidents** (reporters see only their own, under "My incidents") newest first, filter by severity and status, and page through results (10 per page). Filters and the page number are kept in the URL, so filtered views can be bookmarked and the browser Back button works.
 - **Report an incident** at `/incidents/new`, with inline validation that mirrors the API rules (required title up to 200 characters, required description and severity). Responders and admins can also choose an assignee.
 - **Open an incident** at `/incidents/{id}` to edit its title, description and severity. Responders and admins can also change its status in one click and reassign it. Only changed fields are sent.
+- **Review its history** on the same page: who created it, and every later change to the title, description, severity, status or assignee, newest first, with long description changes collapsed. Reporters see the history of their own incidents only.
 - **Manage users** at `/users` (admins only): create accounts, change roles, deactivate and reactivate.
 - **Change your password** at `/account`, which signs out your other devices.
 
@@ -101,6 +104,7 @@ All incident and user endpoints require a signed-in session (401 otherwise), and
 | `GET` | `/incidents` | List visible incidents, newest first. Query: `limit` (1–100, default 20), `offset` (≥0), `severity`, `status` |
 | `GET` | `/incidents/{incident_id}` | Get one incident (404 if it does not exist or is not visible to you) |
 | `PATCH` | `/incidents/{incident_id}` | Update `title`, `description`, `severity`; responders and admins also `status` and `assignee_id` |
+| `GET` | `/incidents/{incident_id}/events` | Audit history, newest first: `limit` (1–100, default 20), `offset`. Same visibility as the incident. Read-only. |
 
 Severity: `low`, `medium`, `high`, `critical`. Status: `open`, `investigating`, `resolved`, `closed`. `assignee_id` must be an active responder or admin (1–2147483647).
 

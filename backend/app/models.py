@@ -1,6 +1,8 @@
 import enum
 from datetime import datetime
+from typing import Any
 from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
@@ -20,6 +22,12 @@ class UserRole(str, enum.Enum):
     REPORTER = "reporter"
     RESPONDER = "responder"
     ADMIN = "admin"
+
+class IncidentEventAction(str, enum.Enum):
+    CREATED = "created"
+    UPDATED = "updated"
+    STATUS_CHANGED = "status_changed"
+    ASSIGNMENT_CHANGED = "assignment_changed"
 
 
 def _enum(enum_class, name):
@@ -72,3 +80,24 @@ class Incident(Base):
 
     reporter: Mapped[User | None] = relationship(foreign_keys=[reporter_id], lazy="joined")
     assignee: Mapped[User | None] = relationship(foreign_keys=[assignee_id], lazy="joined")
+
+
+class IncidentEvent(Base):
+    """Append-only audit record of one incident mutation.
+
+    UPDATE and DELETE are rejected by a database trigger (migration 0003). Both foreign keys
+    are RESTRICT so an event never loses its incident or its actor.
+    """
+    __tablename__ = "incident_events"
+    __table_args__ = (Index("ix_incident_events_incident_id_id", "incident_id", "id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="RESTRICT"), nullable=False)
+    # Always the authenticated user; never taken from the request body.
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    action: Mapped[IncidentEventAction] = mapped_column(_enum(IncidentEventAction, "incident_event_action"), nullable=False)
+    # {"field": {"from": old, "to": new}} for allowlisted incident fields only (see app/audit.py).
+    changes: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    actor: Mapped[User] = relationship(lazy="joined")

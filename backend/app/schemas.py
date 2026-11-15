@@ -1,6 +1,7 @@
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from .models import IncidentStatus, Severity, UserRole
+from typing import Any
+from .models import IncidentEventAction, IncidentStatus, Severity, UserRole
 from .security import EMAIL_MAX_LENGTH, PASSWORD_MAX_LENGTH, is_valid_email, normalize_email, password_problem
 
 # PostgreSQL INTEGER upper bound. Larger IDs must fail validation (422), not reach the database (BUG-1).
@@ -114,3 +115,23 @@ class IncidentPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ---- Audit trail -------------------------------------------------------------------
+
+class IncidentEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    action: IncidentEventAction
+    # {"field": {"from": old, "to": new}}; only audited incident fields.
+    changes: dict[str, dict[str, Any]]
+    actor: UserSummary
+    created_at: datetime
+
+class IncidentEventPage(BaseModel):
+    items: list[IncidentEventRead]
+    total: int
+    limit: int
+    offset: int
+    # People referenced by assignee changes on this page, so the client can show emails.
+    users: list[UserSummary]

@@ -71,6 +71,31 @@ export interface IncidentUpdate {
   assignee_id?: number | null;
 }
 
+export type IncidentEventAction = 'created' | 'updated' | 'status_changed' | 'assignment_changed';
+
+/** One audited field change. Values are plain JSON (strings, numbers or null). */
+export interface FieldChange {
+  from: unknown;
+  to: unknown;
+}
+
+export interface IncidentEvent {
+  id: number;
+  action: IncidentEventAction;
+  changes: Record<string, FieldChange>;
+  actor: UserSummary;
+  created_at: string;
+}
+
+export interface IncidentEventPage {
+  items: IncidentEvent[];
+  total: number;
+  limit: number;
+  offset: number;
+  /** People referenced by assignee changes on this page. */
+  users: UserSummary[];
+}
+
 export interface IncidentListParams {
   limit: number;
   offset: number;

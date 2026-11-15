@@ -18,6 +18,7 @@ Full-stack incident management application built with React, TypeScript, FastAPI
 - Incident list with severity and status filters and pagination
 - Report-an-incident form with validation and clear error messages
 - Incident detail view with one-click status changes, assignment and editing
+- Tamper-resistant audit trail: every change recorded with who, when and before/after values, in the same transaction, shown as a readable history
 - User management for admins and self-service password changes
 - Loading, empty, error, forbidden and success states throughout, and a responsive layout down to phone width
 

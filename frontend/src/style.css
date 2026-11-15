@@ -205,6 +205,30 @@ input[aria-invalid='true'], select[aria-invalid='true'], textarea[aria-invalid='
 .meta dt { color: var(--text-muted); }
 .meta dd { margin: 0; text-align: right; }
 
+/* Incident history */
+.detail-main { display: grid; gap: 1.25rem; min-width: 0; }
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; }
+.timeline-item { display: flex; justify-content: space-between; gap: 0.5rem 1rem; padding: 0.85rem 0 0.85rem 1.1rem; border-left: 2px solid var(--border); position: relative; }
+.timeline-item::before { content: ''; position: absolute; left: -6px; top: 1.15rem; width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); border: 2px solid var(--surface); }
+.timeline-created::before { background: var(--accent); }
+.timeline-status_changed::before { background: var(--st-investigating); }
+.timeline-assignment_changed::before { background: var(--st-open); }
+.timeline-body { display: grid; gap: 0.2rem; min-width: 0; }
+.timeline-body p { overflow-wrap: break-word; }
+.timeline-actor { font-weight: 600; }
+.timeline-time { white-space: nowrap; }
+.history-changes { margin: 0.25rem 0 0; padding-left: 1.1rem; display: grid; gap: 0.2rem; font-size: 0.9rem; }
+.history-changes li { overflow-wrap: anywhere; }
+.history-field { color: var(--text-muted); font-weight: 600; }
+.history-from { text-decoration: line-through; color: var(--text-muted); }
+.history-details { display: inline; }
+.history-details summary { display: inline; cursor: pointer; color: var(--accent); }
+.history-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0.75rem; margin-top: 0.5rem; }
+.history-compare-label { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.history-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16rem; overflow: auto; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.65rem; font-size: 0.875rem; }
+.history-empty { display: grid; gap: 0.25rem; }
+.history-more { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding-top: 0.75rem; }
+
 /* Header navigation and user menu */
 .app-header-start, .app-header-end { display: flex; align-items: center; gap: 0.75rem 1.5rem; flex-wrap: wrap; min-width: 0; }
 .main-nav { display: flex; gap: 0.25rem; }
@@ -254,5 +278,6 @@ input[aria-invalid='true'], select[aria-invalid='true'], textarea[aria-invalid='
   .incident-table td > * { min-width: 0; }
   .incident-table .cell-title { max-width: none; }
   .pagination, .pagination-buttons { width: 100%; }
+  .timeline-item { flex-direction: column; }
   .pagination-buttons { justify-content: space-between; }
 }

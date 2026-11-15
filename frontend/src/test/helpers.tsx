@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react';
 import { vi } from 'vitest';
 import App from '../App';
-import type { Incident, User, UserRole, UserSummary } from '../api/types';
+import type { Incident, IncidentEventPage, User, UserRole, UserSummary } from '../api/types';
 
 export const TEST_CSRF = 'test-csrf-token';
 
@@ -38,11 +38,17 @@ export function jsonResponse(status: number, body: unknown, headers: Record<stri
 
 type Handler = (url: URL, init: RequestInit) => Response | Promise<Response>;
 
+export const EMPTY_EVENTS: IncidentEventPage = { items: [], total: 0, limit: 10, offset: 0, users: [] };
+
 interface MockOptions {
   /** Signed-in user; `null` means signed out. Defaults to a responder. */
   user?: User | null;
   assignees?: UserSummary[];
+  /** Incident history responses. Defaults to an empty history. */
+  events?: IncidentEventPage | ((url: URL) => Response | Promise<Response>);
 }
+
+const EVENTS_PATH = /^\/api\/incidents\/\d+\/events$/;
 
 /**
  * Replaces global fetch. Health, session (`/auth/me`), logout and the assignee directory
@@ -56,6 +62,10 @@ export function mockApi(handler: Handler = () => jsonResponse(500, {}), options:
     if (url.pathname === '/api/auth/me') return user ? jsonResponse(200, { user, csrf_token: TEST_CSRF }) : jsonResponse(401, { detail: 'Authentication required.' });
     if (url.pathname === '/api/auth/logout') return new Response(null, { status: 204 });
     if (url.pathname === '/api/users/assignees') return jsonResponse(200, options.assignees ?? ASSIGNEES);
+    if (EVENTS_PATH.test(url.pathname)) {
+      const events = options.events ?? EMPTY_EVENTS;
+      return typeof events === 'function' ? events(url) : jsonResponse(200, events);
+    }
     return handler(url, init);
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -64,11 +74,18 @@ export function mockApi(handler: Handler = () => jsonResponse(500, {}), options:
 
 const PLUMBING = new Set(['/api/health', '/api/auth/me', '/api/users/assignees']);
 
-/** Calls made to the API, excluding health, session and assignee-directory requests. */
+/** Calls made to the API, excluding health, session, assignee-directory and history requests. */
 export function apiCalls(fetchMock: ReturnType<typeof mockApi>) {
   return fetchMock.mock.calls
     .map(([input, init]) => ({ url: new URL(String(input), 'http://localhost'), init: (init ?? {}) as RequestInit }))
-    .filter(call => !PLUMBING.has(call.url.pathname));
+    .filter(call => !PLUMBING.has(call.url.pathname) && !EVENTS_PATH.test(call.url.pathname));
+}
+
+/** Requests made to the incident history endpoint. */
+export function eventCalls(fetchMock: ReturnType<typeof mockApi>) {
+  return fetchMock.mock.calls
+    .map(([input]) => new URL(String(input), 'http://localhost'))
+    .filter(url => EVENTS_PATH.test(url.pathname));
 }
 
 export function headerOf(init: RequestInit, name: string): string | null {

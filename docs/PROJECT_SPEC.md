@@ -1,6 +1,6 @@
 # Project Specification — Security Incident Management Platform
 
-Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed
+Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) implemented and verified locally, **not yet committed**
 
 A full-stack application for reporting, triaging and resolving security incidents. It is intended to be employer-ready: working end to end, tested automatically, secure by default, and documented.
 
@@ -28,6 +28,7 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 |---|---|---|
 | Frontend | React 19, TypeScript (strict), Vite 6, no UI or routing libraries | `frontend/` |
 | API | FastAPI, Pydantic v2 schemas | `backend/app/main.py`, `auth.py`, `users.py`, `incidents.py`, `schemas.py` |
+| Audit trail | Append-only `incident_events` table, written in the same transaction as each incident change | `backend/app/audit.py`, migration `0003` |
 | Security | Argon2id hashing (`argon2-cffi`), session tokens, login rate limiting | `backend/app/security.py`, `auth.py`, `config.py` |
 | Persistence | SQLAlchemy 2 ORM, Alembic migrations | `backend/app/models.py`, `database.py`, `backend/migrations/` |
 | Database | PostgreSQL 17 | `compose.yaml` service `db` |
@@ -69,11 +70,27 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 | View assignee directory (`/users/assignees`) | ✗ (403) | ✓ | ✓ |
 | Create users, change roles, deactivate | ✗ (403) | ✗ (403) | ✓ (not on themselves) |
 | Change own password | ✓ | ✓ | ✓ |
+| View incident history | Own incidents only | All | All |
 
 - Incidents a reporter may not see return **404**, identical to a missing incident, so their existence is not revealed.
 - Ownership (`reporter_id`) is always taken from the session; a client-supplied `reporter_id` is rejected (422).
 - Assignees must be active responders or admins (otherwise 422).
-- **The visibility rule lives in one function (`_visible_to` in `backend/app/incidents.py`). Audit history, analytics and CSV export must reuse it.**
+- **The visibility rule lives in one function (`_visible_to` in `backend/app/incidents.py`). Audit history uses it (Milestone 2); analytics and CSV export must reuse it.**
+- Incident history follows incident visibility: reporters can read the history of their own incidents only (404 otherwise, including legacy incidents); responders and admins can read every incident's history.
+
+### Audit trail design (Milestone 2)
+
+| Topic | Decision | Notes and limits |
+|---|---|---|
+| Granularity | **Exactly one event per successful create or update request.** `action` is `status_changed` or `assignment_changed` when that is the only kind of field that changed, otherwise `updated`; creation is `created`. `changes` always lists every changed field. | A request that changes nothing records nothing and does not touch the row. |
+| Recorded values | Only an **allowlist** of incident fields: `title`, `description` (full text before and after), `severity`, `status`, `assignee_id`. `record_incident_event` refuses any other key. | Passwords, hashes, session and CSRF tokens, request headers and IP addresses cannot enter the audit trail. Long descriptions are stored in full and collapsed in the UI. |
+| Actor and time | Actor is the authenticated session user; time is the database's `now()` at insert. The API rejects `actor_id`, `action` or `changes` in request bodies (422). | — |
+| Atomicity | The incident change and its event are added to the same SQLAlchemy session and committed together. If either write fails, both roll back. | Tested in both directions (event write fails; incident write fails) and for creation. |
+| Concurrency | Updates read the incident with `SELECT … FOR UPDATE OF incidents` (and refresh any cached copy) before computing the diff, so concurrent updates are serialised and each event's `from` values are the ones actually persisted by the previous change. | Plain reads are not blocked. A second writer waits for the first to commit. |
+| Immutability | No API can edit or delete events. A PostgreSQL trigger raises on `UPDATE`, `DELETE` and `TRUNCATE` of `incident_events`. Foreign keys to the incident and the actor are `RESTRICT`, so history never loses its references. | **Limits:** the table owner or a superuser can disable or drop the trigger (`ALTER TABLE … DISABLE TRIGGER` was demonstrated in a rolled-back transaction during verification), `session_replication_role = replica` skips row triggers, and downgrading migration `0003` drops the table and its history. Today the app connects as the table owner; running it as a non-owner role with only `INSERT`/`SELECT` on this table is part of Milestone 6 (ISSUE-12). |
+| History start | **No backfill.** Changes made before migration `0003` have no trustworthy actor or time, so legacy incidents show an empty history with an explanation. | — |
+| Reading | `GET /incidents/{id}/events` checks incident visibility first, then returns events newest first (`created_at`, then `id`), paginated, with the emails of people referenced by assignee changes. | — |
+| Rendering | The UI shows every audited value as text through React (never as HTML) and falls back to plain strings for unknown fields. | Verified with an HTML/JavaScript payload in a title and description. |
 
 ### Data model
 
@@ -105,6 +122,19 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 
 Indexes: `ix_incidents_status_severity`, `ix_incidents_reporter_id`, `ix_incidents_assignee_id`, `ix_auth_sessions_user_id`.
 
+**`incident_events`** (migration `0003`): append-only audit trail.
+
+| Column | Type | Rules |
+|---|---|---|
+| `id` | integer, primary key | tie-breaker for ordering |
+| `incident_id` | integer, FK → `incidents` (`RESTRICT`) | an incident with history cannot be deleted |
+| `actor_id` | integer, FK → `users` (`RESTRICT`), not null | the signed-in user who made the change; never client input; an actor with history cannot be deleted |
+| `action` | enum `incident_event_action` | `created`, `updated`, `status_changed`, `assignment_changed` |
+| `changes` | `JSONB`, not null | `{"field": {"from": old, "to": new}}` for allowlisted fields only |
+| `created_at` | timestamptz | set by the database at insert |
+
+Indexes: `ix_incident_events_incident_id_id (incident_id, id)`, `ix_incident_events_actor_id`.
+
 **Legacy data strategy (migration `0002`).** Every existing incident is preserved. Incidents created before accounts existed keep `reporter_id = NULL` and are visible to responders and admins only. Existing `assignee_id` values are set to `NULL`, because no users existed before this migration, so they could not refer to anyone; this step is not reversed by a downgrade. The downgrade otherwise removes the users and sessions tables, the ownership column, both foreign keys and the `user_role` type.
 
 ### API
@@ -122,6 +152,7 @@ All `/incidents` and `/users` endpoints require a session (**401** otherwise). S
 | `GET` | `/incidents` | Any role | List visible incidents newest first. `limit` 1–100 (default 20), `offset` ≥ 0, optional `severity`, `status`. |
 | `GET` | `/incidents/{id}` | Any role | 404 if missing **or not visible** |
 | `PATCH` | `/incidents/{id}` | Any role | Partial update. Reporters: own incidents, no `status`/`assignee_id` (403). Only `assignee_id` may be `null`. |
+| `GET` | `/incidents/{id}/events` | Any role (visibility applies) | Audit history newest first. `limit` 1–100 (default 20), `offset` ≥ 0. Returns `{items, total, limit, offset, users}`; each item is `{id, action, changes, actor: {id, email}, created_at}`. 404 when the incident is missing or not visible. No write methods (405). |
 | `GET` | `/users/assignees` | Responder, admin | Active responders and admins as `{id, email}` |
 | `GET` | `/users` | Admin | All accounts |
 | `POST` | `/users` | Admin | Create `{email, password, role}`. 409 on duplicate email. |
@@ -132,6 +163,28 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 ---
 
 ## Completed functionality
+
+### Milestone 2 — Incident audit trail
+
+Implemented and verified locally on 2026-11-15. **Not yet committed**; CI confirmation will be recorded here after the push.
+
+| Functionality | Status | Evidence |
+|---|---|---|
+| `created` event on every incident creation, with the session user as actor and all initial values | **Verified (local)** | `test_audit.py::test_create_records_one_created_event_with_the_session_actor`, `::test_responder_create_with_assignee_records_the_assignee` |
+| Exactly one correctly classified event per update; every changed field kept; no event for no-op updates | **Verified (local)** | `test_audit.py::test_each_update_records_exactly_one_correctly_classified_event` (5 cases), `::test_noop_update_records_nothing_and_does_not_touch_the_row`, `::test_unassign_records_previous_assignee`, `::test_full_description_is_kept_before_and_after` |
+| Actor is whoever made the change; client cannot supply actor or audit values | **Verified (local)** | `test_audit.py::test_actor_is_whoever_made_the_change_not_the_reporter`, `::test_client_cannot_supply_actor_or_audit_values` |
+| Only allowlisted fields recorded; no secrets | **Verified (local)** | `test_audit.py::test_audit_records_only_allowlisted_fields`; database scan during the browser check found no secret-like values or other keys |
+| History visibility per role, including legacy incidents; 401 when signed out | **Verified (local)** | `test_audit.py::test_history_visibility_by_role`; browser check |
+| Pagination and newest-first ordering; emails for assignee changes; no write methods | **Verified (local)** | `test_audit.py::test_history_is_paginated_newest_first_with_actor_and_users`, `::test_history_has_no_write_endpoints` |
+| Atomic writes: a failed event write rolls back the update or creation; a failed incident write rolls back the event | **Verified (local)** | `test_audit.py::test_failed_event_write_rolls_back_the_update`, `::test_failed_event_write_rolls_back_the_creation`, `::test_failed_incident_write_rolls_back_the_event` |
+| Immutability trigger rejects `UPDATE`, `DELETE`, `TRUNCATE`; incident and actor references cannot be deleted | **Verified (local)** | `test_audit.py::test_database_rejects_changes_to_audit_events` (4 cases), `::test_actor_and_incident_references_are_preserved`; `psql` checks on a disposable stack |
+| Concurrent updates serialised by a row lock | **Verified (local)** | `test_audit.py::test_update_locks_the_incident_row` (SQL contains `FOR UPDATE OF incidents`), `::test_concurrent_writers_are_serialised_by_the_row_lock` (two real transactions; the second writer times out waiting) |
+| Migration `0003` upgrade, downgrade to base, re-upgrade; models match migrations | **Verified (local)** | CI-equivalent run on a disposable PostgreSQL |
+| History section: plain-language entries, collapsed description diffs, loading, empty, error with Retry, "Show older", live refresh after edits, safe text rendering | **Verified (local)** | `IncidentHistory.test.tsx` (8 tests); browser check |
+
+**Test-quality check:** 11 audit protections were deliberately disabled one at a time (row lock, history visibility, update auditing, creation auditing, commit order, actor source, no-op handling, allowlist guard, classification, before-value timing, ordering). The first run missed one (actor taken from the reporter), because every test's actor was also the reporter; `test_actor_is_whoever_made_the_change_not_the_reporter` was added and now catches it. All 11 are caught.
+
+**Manual browser check (2026-11-15):** 18/18 checks in Chromium on a disposable stack covering reporter, second reporter and responder flows, a legacy incident, an HTML payload, pagination over 17 events and mobile layout, followed by direct `psql` checks of the trigger and stored data.
 
 ### Milestone 1 — Authentication and RBAC
 
@@ -178,7 +231,7 @@ Committed as `1ae693b52ed41bbcc274df03fcfa8d1ec6a64e22` on 2026-11-15 and verifi
 | CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | GitHub Actions run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
 | Supply chain | Lockfile with `npm ci`; read-only CI token; no repository secrets | **Implemented** | `frontend/package-lock.json`, `ci.yml` |
 
-**Test counts:** 72 backend (pytest), 60 frontend (Vitest + React Testing Library). Before Milestone 1: 6 and 35.
+**Test counts:** 98 backend (pytest), 68 frontend (Vitest + React Testing Library). After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
 
 The manual browser checks were one-off Playwright scripts, not part of the repository or CI. Milestone 5 makes them permanent.
 
@@ -197,7 +250,8 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 | ISSUE-7 | The login rate limiter is in memory and per process, and behind the Vite proxy every browser shares the proxy's IP, so the per-IP limit is effectively global. | Limits reset on restart and are not shared across workers; many failures from anyone can briefly block all sign-ins. | Milestone 6: shared store (PostgreSQL or Redis) and trusted-proxy client IP handling. |
 | ISSUE-8 | No self-service password reset, and no forced password change after an admin sets a temporary password. | Admins must share temporary passwords out of band. | Future milestone (needs email delivery); forced first-login change could come in Milestone 6. |
 | ISSUE-9 | Expired session rows are deleted only when presented or when that user signs in again. | Slow growth of `auth_sessions`. | Milestone 6: periodic cleanup. |
-| ISSUE-10 | Demoting a responder or admin to reporter does not unassign incidents already assigned to them. | Stale assignment visible to staff. | Decide policy in Milestone 2 (audit trail will record it). |
+| ISSUE-10 | Demoting a responder or admin to reporter does not unassign incidents already assigned to them. | Stale assignment visible to staff. | Decided in Milestone 2: deferred to Milestone 6 (automatic unassignment on demotion or deactivation, recorded as `assignment_changed` events with the admin as actor). |
+| ISSUE-12 | The app connects to PostgreSQL as the owner of `incident_events`, so a compromised app or operator with that role could disable the immutability trigger. | Audit immutability is enforced against the application's own SQL and accidental changes, not against a malicious database owner. | Milestone 6: run the app as a role with only `INSERT`/`SELECT` on `incident_events` and no ownership; consider shipping events to external append-only storage. |
 | ISSUE-11 | `Secure` cookies work over plain HTTP only on `localhost` (a browser exception). | Any other host must use HTTPS. `SESSION_COOKIE_SECURE=false` exists for local testing only. | Milestone 6 deployment uses HTTPS. |
 
 ---
@@ -206,17 +260,17 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 
 Milestones are delivered in order, each as a small, separately approved change with passing CI. **Each milestone keeps all earlier tests passing and adds tests for its own behaviour.** Milestones 2–4 must apply the same visibility rule as incident endpoints (reporters: own incidents only) and include negative tests for it.
 
-### Milestone 2 — Audit trail · Planned
+### Milestone 2 — Audit trail · Implemented (pending commit)
 
 Every change to an incident is recorded and cannot be edited.
 
 **Acceptance criteria**
-- [ ] `incident_events` table (migration) storing incident ID, **authenticated actor** (user ID), **timestamp** (server-side, UTC), **action** (`created`, `updated`, `status_changed`, …), and **before/after values** of each changed field.
-- [ ] Events are written in the same database transaction as the change, so a change is never saved without its audit record.
-- [ ] No API exists to edit or delete audit events.
-- [ ] `GET /incidents/{id}/events` returns the history, newest first, only to users allowed to view the incident (same visibility rule; 404 otherwise).
-- [ ] Incident detail page shows a readable activity timeline.
-- [ ] Tests prove: each create and update produces exactly one correct event; no-op updates produce none; actor and diff are correct; history respects permissions, including cross-reporter denial.
+- [x] `incident_events` table (migration) storing incident ID, **authenticated actor** (user ID), **timestamp** (server-side, UTC), **action** (`created`, `updated`, `status_changed`, …), and **before/after values** of each changed field.
+- [x] Events are written in the same database transaction as the change, so a change is never saved without its audit record.
+- [x] No API exists to edit or delete audit events.
+- [x] `GET /incidents/{id}/events` returns the history, newest first, only to users allowed to view the incident (same visibility rule; 404 otherwise).
+- [x] Incident detail page shows a readable activity timeline.
+- [x] Tests prove: each create and update produces exactly one correct event; no-op updates produce none; actor and diff are correct; history respects permissions, including cross-reporter denial.
 
 ### Milestone 3 — Analytics dashboard · Planned
 
@@ -261,6 +315,7 @@ Turn the manual browser verification into a permanent, automated suite.
 - [ ] Security headers (Content-Security-Policy, HSTS when on HTTPS, `X-Content-Type-Options`, frame protections); CORS locked down; request size limits.
 - [ ] Configuration only through environment variables, with a documented `.env.example`; no default credentials in production paths (resolves ISSUE-4).
 - [ ] Shared, restart-safe login rate limiting with correct client IPs behind the proxy (ISSUE-7); expired-session cleanup (ISSUE-9); HTTPS-only cookies (ISSUE-11).
+- [ ] Least-privilege database role for the app (no ownership; `INSERT`/`SELECT` only on `incident_events`) (ISSUE-12); automatic unassignment on demotion or deactivation, recorded in the audit trail (ISSUE-10).
 - [ ] Structured logging without secrets or personal data; consistent error responses.
 - [ ] Dependency review and CI dependency/vulnerability scanning; resolve ISSUE-3.
 - [ ] Documented deployment to a chosen host, with a deploy workflow that uses a protected environment for any secrets.
