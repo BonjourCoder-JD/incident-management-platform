@@ -11,6 +11,13 @@ export function SeverityBadge({ severity }: { severity: Severity }) {
   );
 }
 
+/** An email address that wraps after the @ rather than mid-word on narrow screens. */
+export function Email({ value }: { value: string }) {
+  const at = value.indexOf('@');
+  if (at < 1) return <>{value}</>;
+  return <span className="email">{value.slice(0, at)}<wbr />{value.slice(at)}</span>;
+}
+
 export function StatusBadge({ status }: { status: IncidentStatus }) {
   return <span className={`badge status-${status}`}>{STATUS_LABELS[status]}</span>;
 }

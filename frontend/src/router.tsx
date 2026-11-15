@@ -1,11 +1,13 @@
 import { useMemo, useSyncExternalStore, type AnchorHTMLAttributes, type MouseEvent } from 'react';
 
-// A minimal History API router: three routes do not justify a routing dependency.
+// A minimal History API router: a handful of routes do not justify a routing dependency.
 
 export type Route =
   | { name: 'list'; search: URLSearchParams }
   | { name: 'new' }
   | { name: 'detail'; id: number }
+  | { name: 'users' }
+  | { name: 'account' }
   | { name: 'notFound' };
 
 const NAVIGATE_EVENT = 'app:navigate';
@@ -14,6 +16,8 @@ export function parseRoute(pathname: string, search: string): Route {
   const path = pathname.replace(/\/+$/, '') || '/';
   if (path === '/' || path === '/incidents') return { name: 'list', search: new URLSearchParams(search) };
   if (path === '/incidents/new') return { name: 'new' };
+  if (path === '/users') return { name: 'users' };
+  if (path === '/account') return { name: 'account' };
   const match = /^\/incidents\/([1-9]\d{0,9})$/.exec(path);
   if (match) {
     const id = Number(match[1]);

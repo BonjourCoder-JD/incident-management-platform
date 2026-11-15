@@ -8,3 +8,9 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 class Base(DeclarativeBase):
     pass
+
+
+def get_db():
+    """FastAPI dependency: one database session per request."""
+    with SessionLocal() as session:
+        yield session

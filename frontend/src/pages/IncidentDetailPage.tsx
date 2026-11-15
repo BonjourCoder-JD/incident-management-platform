@@ -1,8 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError, getIncident, updateIncident, type FieldErrors } from '../api/client';
 import { STATUSES, type Incident, type IncidentStatus, type IncidentUpdate, type Severity } from '../api/types';
+import { permissions, useCurrentUser } from '../auth';
 import { IncidentFields } from '../components/IncidentFields';
-import { Alert, EmptyState, LoadingState, SeverityBadge, StatusBadge } from '../components/ui';
+import { useAssignees } from '../components/useAssignees';
+import { Alert, Email, EmptyState, LoadingState, SeverityBadge, StatusBadge } from '../components/ui';
 import { useFlash } from '../flash';
 import { formatDateTime, STATUS_LABELS } from '../format';
 import { Link } from '../router';
@@ -27,7 +29,7 @@ function toFormValues(incident: Incident): IncidentFormValues {
 }
 
 /** Returns only the fields that differ from the saved incident. */
-function changedFields(incident: Incident, values: IncidentFormValues): IncidentUpdate {
+function changedFields(incident: Incident, values: IncidentFormValues, canAssign: boolean): IncidentUpdate {
   const changes: IncidentUpdate = {};
   const title = values.title.trim();
   const description = values.description.trim();
@@ -35,11 +37,13 @@ function changedFields(incident: Incident, values: IncidentFormValues): Incident
   if (title !== incident.title) changes.title = title;
   if (description !== incident.description) changes.description = description;
   if (values.severity !== incident.severity) changes.severity = values.severity as Severity;
-  if (assignee !== incident.assignee_id) changes.assignee_id = assignee;
+  if (canAssign && assignee !== incident.assignee_id) changes.assignee_id = assignee;
   return changes;
 }
 
 export function IncidentDetailPage({ id }: { id: number }) {
+  const user = useCurrentUser();
+  const canTriage = permissions.canTriage(user);
   const { flash, dismiss } = useFlash();
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [reloadKey, setReloadKey] = useState(0);
@@ -48,6 +52,7 @@ export function IncidentDetailPage({ id }: { id: number }) {
   const [values, setValues] = useState<IncidentFormValues | null>(null);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [saving, setSaving] = useState<'status' | 'details' | null>(null);
+  const assignees = useAssignees(canTriage && editing);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -69,7 +74,7 @@ export function IncidentDetailPage({ id }: { id: number }) {
   if (state.kind === 'notFound') {
     return (
       <EmptyState title={`Incident #${id} was not found`} action={<Link to="/" className="button button-secondary">Back to incidents</Link>}>
-        It may have been entered incorrectly.
+        It may have been entered incorrectly, or it is not visible to your account.
       </EmptyState>
     );
   }
@@ -111,7 +116,7 @@ export function IncidentDetailPage({ id }: { id: number }) {
   }
 
   function changeStatus(status: IncidentStatus) {
-    if (status === incident.status || saving) return;
+    if (!canTriage || status === incident.status || saving) return;
     void save('status', { status }, `Status changed to ${STATUS_LABELS[status]}.`);
   }
 
@@ -133,7 +138,7 @@ export function IncidentDetailPage({ id }: { id: number }) {
       focusFirstInvalid(form);
       return;
     }
-    const changes = changedFields(incident, values);
+    const changes = changedFields(incident, values, canTriage);
     if (Object.keys(changes).length === 0) {
       setEditing(false);
       setNotice({ tone: 'info', text: 'No changes to save.' });
@@ -171,7 +176,15 @@ export function IncidentDetailPage({ id }: { id: number }) {
           {editing && values ? (
             <form className="form" noValidate onSubmit={handleEditSubmit} aria-label="Edit incident details">
               <h2>Edit details</h2>
-              <IncidentFields idPrefix="edit" values={values} errors={errors} disabled={saving === 'details'} onChange={setValues} />
+              <IncidentFields
+                idPrefix="edit"
+                values={values}
+                errors={errors}
+                disabled={saving === 'details'}
+                assignees={assignees}
+                currentAssignee={incident.assignee}
+                onChange={setValues}
+              />
               <div className="form-actions">
                 <button type="button" className="button button-ghost" disabled={saving === 'details'} onClick={() => { setEditing(false); setErrors({}); }}>
                   Cancel
@@ -192,28 +205,39 @@ export function IncidentDetailPage({ id }: { id: number }) {
         <aside className="detail-sidebar">
           <section className="card" aria-labelledby="status-heading">
             <h2 id="status-heading">Status</h2>
-            <div className="status-options" role="group" aria-label="Change status">
-              {STATUSES.map(status => (
-                <button
-                  key={status}
-                  type="button"
-                  className={`status-option status-${status}`}
-                  aria-pressed={incident.status === status}
-                  disabled={saving !== null}
-                  onClick={() => changeStatus(status)}
-                >
-                  {STATUS_LABELS[status]}
-                </button>
-              ))}
-            </div>
-            {saving === 'status' && <p className="muted small" role="status">Updating status…</p>}
+            {canTriage ? (
+              <>
+                <div className="status-options" role="group" aria-label="Change status">
+                  {STATUSES.map(status => (
+                    <button
+                      key={status}
+                      type="button"
+                      className={`status-option status-${status}`}
+                      aria-pressed={incident.status === status}
+                      disabled={saving !== null}
+                      onClick={() => changeStatus(status)}
+                    >
+                      {STATUS_LABELS[status]}
+                    </button>
+                  ))}
+                </div>
+                {saving === 'status' && <p className="muted small" role="status">Updating status…</p>}
+              </>
+            ) : (
+              <>
+                <StatusBadge status={incident.status} />
+                <p className="muted small status-note">Responders update the status as they work on your incident.</p>
+              </>
+            )}
           </section>
 
           <section className="card" aria-labelledby="meta-heading">
             <h2 id="meta-heading">Details</h2>
             <dl className="meta">
+              <dt>Reporter</dt>
+              <dd className="meta-email">{incident.reporter ? <Email value={incident.reporter.email} /> : <span className="muted">Before accounts</span>}</dd>
               <dt>Assignee</dt>
-              <dd>{incident.assignee_id ?? <span className="muted">Unassigned</span>}</dd>
+              <dd className="meta-email">{incident.assignee ? <Email value={incident.assignee.email} /> : <span className="muted">Unassigned</span>}</dd>
               <dt>Created</dt>
               <dd><time dateTime={incident.created_at}>{formatDateTime(incident.created_at)}</time></dd>
               <dt>Last updated</dt>

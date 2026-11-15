@@ -113,6 +113,16 @@ jobs:
         run: alembic upgrade head
       - name: Check models match migrations
         run: alembic check
+      - name: Bootstrap admin command works on the migrated schema
+        env:
+          # Throwaway value for this job's temporary database only.
+          BOOTSTRAP_ADMIN_PASSWORD: ci-only-disposable-passphrase
+        run: |
+          python -m app.cli create-admin --email ci.admin@example.com
+          if python -m app.cli create-admin --email ci.admin@example.com; then
+            echo "Duplicate admin creation should have failed" >&2
+            exit 1
+          fi
 
   frontend-build:
     name: Frontend tests and build

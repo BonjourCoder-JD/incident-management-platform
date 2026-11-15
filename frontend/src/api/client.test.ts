@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, createIncident, listIncidents, parseErrorBody, updateIncident } from './client';
+import { afterEach } from 'vitest';
+import { ApiError, createIncident, getSession, listIncidents, login, parseErrorBody, setCsrfToken, setUnauthorizedHandler, updateIncident } from './client';
 import { jsonResponse } from '../test/helpers';
 
 describe('parseErrorBody', () => {
@@ -57,5 +58,48 @@ describe('API requests', () => {
     expect(error).toBeInstanceOf(ApiError);
     expect(error.status).toBe(0);
     expect(error.message).toMatch(/unable to reach the api/i);
+  });
+});
+
+describe('session handling', () => {
+  afterEach(() => {
+    setCsrfToken(null);
+    setUnauthorizedHandler(null);
+  });
+
+  it('sends the CSRF token only on state-changing requests', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, { items: [], total: 0, limit: 10, offset: 0 }));
+    vi.stubGlobal('fetch', fetchMock);
+    setCsrfToken('abc123');
+    await listIncidents({ limit: 10, offset: 0 });
+    await updateIncident(1, { title: 'x' });
+    const calls = fetchMock.mock.calls as unknown as [string, RequestInit][];
+    expect(new Headers(calls[0][1].headers).get('X-CSRF-Token')).toBeNull();
+    expect(new Headers(calls[1][1].headers).get('X-CSRF-Token')).toBe('abc123');
+    expect(calls.every(([, init]) => init.credentials === 'same-origin')).toBe(true);
+  });
+
+  it('reports 401s on data requests as an ended session, but not on login or session checks', async () => {
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { detail: 'Authentication required.' })));
+
+    await expect(login('a@example.com', 'wrong')).rejects.toMatchObject({ status: 401 });
+    await expect(getSession()).resolves.toBeNull();
+    expect(handler).not.toHaveBeenCalled();
+
+    await expect(listIncidents({ limit: 10, offset: 0 })).rejects.toMatchObject({ status: 401 });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes Retry-After on rate-limited responses', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(429, { detail: 'Too many failed sign-in attempts.' }, { 'Retry-After': '120' })));
+    const error = await login('a@example.com', 'x').catch(e => e);
+    expect(error.retryAfterSeconds).toBe(120);
+  });
+
+  it('strips the "Value error, " prefix from Pydantic messages', () => {
+    expect(parseErrorBody(422, { detail: [{ loc: ['body', 'email'], msg: 'Value error, Enter a valid email address.' }] }).fieldErrors)
+      .toEqual({ email: 'Enter a valid email address.' });
   });
 });

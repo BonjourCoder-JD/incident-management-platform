@@ -1,4 +1,4 @@
-import { SEVERITIES, TITLE_MAX_LENGTH, type Severity } from '../api/types';
+import { SEVERITIES, TITLE_MAX_LENGTH, type Severity, type UserSummary } from '../api/types';
 import type { FieldErrors } from '../api/client';
 import { SEVERITY_LABELS } from '../format';
 import type { IncidentFormValues } from '../validation';
@@ -8,6 +8,13 @@ interface Props {
   values: IncidentFormValues;
   errors: FieldErrors;
   disabled?: boolean;
+  /**
+   * People the incident can be assigned to. `null` hides the field entirely (reporters
+   * may not assign); `'loading'` and `'error'` describe the directory request.
+   */
+  assignees: UserSummary[] | 'loading' | 'error' | null;
+  /** The saved assignee, shown even if they are no longer in the directory. */
+  currentAssignee?: UserSummary | null;
   onChange: (values: IncidentFormValues) => void;
 }
 
@@ -21,7 +28,7 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 }
 
 /** Title, description, severity and assignee inputs shared by the create and edit forms. */
-export function IncidentFields({ idPrefix, values, errors, disabled, onChange }: Props) {
+export function IncidentFields({ idPrefix, values, errors, disabled, assignees, currentAssignee, onChange }: Props) {
   const ids = {
     title: `${idPrefix}-title`,
     description: `${idPrefix}-description`,
@@ -81,22 +88,29 @@ export function IncidentFields({ idPrefix, values, errors, disabled, onChange }:
         <FieldError id={ids.severity} message={errors.severity} />
       </div>
 
-      <div className="field">
-        <label htmlFor={ids.assignee}>Assignee ID <span className="optional">(optional)</span></label>
-        <input
-          id={ids.assignee}
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          value={values.assigneeId}
-          disabled={disabled}
-          aria-invalid={Boolean(errors.assignee_id)}
-          aria-describedby={describedBy(ids.assignee, errors.assignee_id, true)}
-          onChange={event => set('assigneeId', event.target.value)}
-        />
-        <p className="field-hint" id={`${ids.assignee}-hint`}>Numeric user ID. Leave blank if unassigned.</p>
-        <FieldError id={ids.assignee} message={errors.assignee_id} />
-      </div>
+      {assignees !== null && (
+        <div className="field">
+          <label htmlFor={ids.assignee}>Assignee <span className="optional">(optional)</span></label>
+          <select
+            id={ids.assignee}
+            value={values.assigneeId}
+            disabled={disabled || assignees === 'loading'}
+            aria-invalid={Boolean(errors.assignee_id)}
+            aria-describedby={describedBy(ids.assignee, errors.assignee_id, true)}
+            onChange={event => set('assigneeId', event.target.value)}
+          >
+            <option value="">Unassigned</option>
+            {currentAssignee && (assignees === 'loading' || assignees === 'error' || !assignees.some(user => user.id === currentAssignee.id)) && (
+              <option value={String(currentAssignee.id)}>{currentAssignee.email}</option>
+            )}
+            {Array.isArray(assignees) && assignees.map(user => <option key={user.id} value={String(user.id)}>{user.email}</option>)}
+          </select>
+          <p className="field-hint" id={`${ids.assignee}-hint`}>
+            {assignees === 'loading' ? 'Loading responders…' : assignees === 'error' ? 'Could not load responders. Try again later.' : 'Active responders and admins.'}
+          </p>
+          <FieldError id={ids.assignee} message={errors.assignee_id} />
+        </div>
+      )}
     </div>
   );
 }

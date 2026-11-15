@@ -1,13 +1,29 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 import os
 
+from .auth import router as auth_router
 from .incidents import router as incidents_router
+from .users import router as users_router
 
-app = FastAPI(title="Incident Management API", version="0.2.0")
+app = FastAPI(title="Incident Management API", version="0.3.0")
+app.include_router(auth_router)
 app.include_router(incidents_router)
+app.include_router(users_router)
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg://incident:incident@db:5432/incidents")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    # FastAPI echoes submitted values ("input") in 422 responses by default. Strip them so
+    # passwords and other credentials are never reflected back or captured downstream.
+    errors = [{"loc": error.get("loc"), "msg": error.get("msg"), "type": error.get("type")} for error in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
+
 
 @app.get("/health")
 def health():

@@ -23,15 +23,17 @@ function patchBodies(fetchMock: ReturnType<typeof mockApi>) {
 
 describe('Incident detail', () => {
   it('shows the incident', async () => {
-    serveIncident(makeIncident({ id: 5, title: 'Data exfiltration', description: 'Line one\nLine two', severity: 'critical', assignee_id: 3 }));
+    serveIncident(makeIncident({ id: 5, title: 'Data exfiltration', description: 'Line one\nLine two', severity: 'critical', assignee_id: 201, assignee: { id: 201, email: 'responder@example.com' } }));
     renderAt('/incidents/5');
 
-    expect(screen.getByText('Loading incident…')).toBeInTheDocument();
+    expect(await screen.findByText('Loading incident…')).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Data exfiltration' })).toBeInTheDocument();
     expect(screen.getByText('Incident #5')).toBeInTheDocument();
     expect(screen.getByText('Critical')).toBeInTheDocument();
     expect(screen.getByText(/Line one\s+Line two/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('reporter@example.com')).toBeInTheDocument();
+    expect(screen.getByText('responder@example.com', { selector: 'dd .email' })).toBeInTheDocument();
   });
 
   it('shows a not-found state for unknown incidents', async () => {
@@ -43,7 +45,7 @@ describe('Incident detail', () => {
   it('treats malformed incident URLs as page not found without calling the API', async () => {
     const fetchMock = mockApi(() => jsonResponse(500, {}));
     renderAt('/incidents/abc');
-    expect(screen.getByText('Page not found')).toBeInTheDocument();
+    expect(await screen.findByText('Page not found')).toBeInTheDocument();
     expect(apiCalls(fetchMock)).toHaveLength(0);
   });
 
@@ -60,7 +62,7 @@ describe('Incident detail', () => {
   });
 
   it('saves only the changed fields and can clear the assignee', async () => {
-    const fetchMock = serveIncident(makeIncident({ id: 5, assignee_id: 12 }));
+    const fetchMock = serveIncident(makeIncident({ id: 5, assignee_id: 201, assignee: { id: 201, email: 'responder@example.com' } }));
     renderAt('/incidents/5');
     await screen.findByRole('heading', { name: 'Suspicious login' });
 
@@ -68,7 +70,7 @@ describe('Incident detail', () => {
     const title = screen.getByLabelText('Title');
     await userEvent.clear(title);
     await userEvent.type(title, 'Confirmed account takeover');
-    await userEvent.clear(screen.getByLabelText(/Assignee ID/));
+    await userEvent.selectOptions(await screen.findByLabelText(/Assignee/), 'Unassigned');
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     expect(await screen.findByText('Incident details saved.')).toBeInTheDocument();

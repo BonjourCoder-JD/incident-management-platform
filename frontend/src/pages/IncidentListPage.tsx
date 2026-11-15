@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, listIncidents } from '../api/client';
 import { SEVERITIES, STATUSES, isSeverity, isStatus, type IncidentPage, type IncidentStatus, type Severity } from '../api/types';
-import { Alert, EmptyState, LoadingState, SeverityBadge, StatusBadge } from '../components/ui';
+import { permissions, useCurrentUser } from '../auth';
+import { Alert, Email, EmptyState, LoadingState, SeverityBadge, StatusBadge } from '../components/ui';
 import { formatDateTime, SEVERITY_LABELS, STATUS_LABELS } from '../format';
 import { Link, navigate } from '../router';
 
@@ -39,6 +40,8 @@ type LoadState =
   | { kind: 'ready'; page: IncidentPage };
 
 export function IncidentListPage({ search }: { search: URLSearchParams }) {
+  const user = useCurrentUser();
+  const seesAll = permissions.canTriage(user);
   const filters = readFilters(search);
   const { severity, status, page } = filters;
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
@@ -67,8 +70,8 @@ export function IncidentListPage({ search }: { search: URLSearchParams }) {
     <section aria-labelledby="incidents-heading">
       <div className="page-header">
         <div>
-          <h1 id="incidents-heading">Incidents</h1>
-          <p className="muted">Track, triage and resolve reported security incidents.</p>
+          <h1 id="incidents-heading">{seesAll ? 'Incidents' : 'My incidents'}</h1>
+          <p className="muted">{seesAll ? 'Track, triage and resolve reported security incidents.' : 'Incidents you have reported and their current status.'}</p>
         </div>
         <Link to="/incidents/new" className="button button-primary">New incident</Link>
       </div>
@@ -168,7 +171,7 @@ function Results({ page, pageNumber, hasFilters, update }: {
                 </td>
                 <td data-label="Severity"><SeverityBadge severity={incident.severity} /></td>
                 <td data-label="Status"><StatusBadge status={incident.status} /></td>
-                <td data-label="Assignee">{incident.assignee_id ?? <span className="muted">Unassigned</span>}</td>
+                <td data-label="Assignee" className="cell-email">{incident.assignee ? <Email value={incident.assignee.email} /> : <span className="muted">Unassigned</span>}</td>
                 <td data-label="Last updated"><time dateTime={incident.updated_at}>{formatDateTime(incident.updated_at)}</time></td>
               </tr>
             ))}

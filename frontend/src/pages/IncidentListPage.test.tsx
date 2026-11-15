@@ -10,18 +10,18 @@ function page(items = [makeIncident()], total = items.length, offset = 0) {
 describe('Incident list', () => {
   it('shows incidents returned by the API', async () => {
     mockApi(() => jsonResponse(200, page([
-      makeIncident({ id: 2, title: 'Ransomware alert', severity: 'critical', status: 'investigating', assignee_id: 7 }),
+      makeIncident({ id: 2, title: 'Ransomware alert', severity: 'critical', status: 'investigating', assignee_id: 201, assignee: { id: 201, email: 'responder@example.com' } }),
       makeIncident({ id: 1, title: 'Suspicious login' }),
     ])));
     renderAt('/');
 
-    expect(screen.getByText('Loading incidents…')).toBeInTheDocument();
+    expect(await screen.findByText('Loading incidents…')).toBeInTheDocument();
     const link = await screen.findByRole('link', { name: 'Ransomware alert' });
     expect(link).toHaveAttribute('href', '/incidents/2');
     const row = link.closest('tr')!;
     expect(within(row).getByText('Critical')).toBeInTheDocument();
     expect(within(row).getByText('Investigating')).toBeInTheDocument();
-    expect(within(row).getByText('7')).toBeInTheDocument();
+    expect(within(row).getByText('responder@example.com')).toBeInTheDocument();
     expect(screen.getByText('Showing 1–2 of 2')).toBeInTheDocument();
     expect(await screen.findByText('API connected')).toBeInTheDocument();
   });
