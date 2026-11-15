@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react';
 import { vi } from 'vitest';
 import App from '../App';
-import type { CommentPage, Incident, IncidentEventPage, User, UserRole, UserSummary } from '../api/types';
+import type { CommentPage, Incident, IncidentEventPage, IncidentSla, User, UserRole, UserSummary } from '../api/types';
 
 export const TEST_CSRF = 'test-csrf-token';
 
@@ -50,6 +50,8 @@ type Handler = (url: URL, init: RequestInit) => Response | Promise<Response>;
 
 export const EMPTY_EVENTS: IncidentEventPage = { items: [], total: 0, limit: 10, offset: 0, users: [] };
 export const EMPTY_COMMENTS: CommentPage = { items: [], total: 0, limit: 50, offset: 0 };
+/** An incident that is not SLA-tracked: the default for tests that are not about SLA. */
+export const UNTRACKED_SLA: IncidentSla = { now: '2026-11-15T12:00:00Z', tracked: false, current_cycle: 0, cycles: [], escalations: null };
 
 interface MockOptions {
   /** Signed-in user; `null` means signed out. Defaults to a responder. */
@@ -59,10 +61,13 @@ interface MockOptions {
   events?: IncidentEventPage | ((url: URL) => Response | Promise<Response>);
   /** Discussion requests (GET and POST). Defaults to an empty discussion; POST then fails. */
   comments?: CommentPage | Handler;
+  /** SLA responses (`/incidents/{id}/sla`). Defaults to not tracked. */
+  sla?: IncidentSla | Handler;
 }
 
 const EVENTS_PATH = /^\/api\/incidents\/\d+\/events$/;
 const COMMENTS_PATH = /^\/api\/incidents\/\d+\/comments$/;
+const SLA_PATH = /^\/api\/incidents\/\d+\/sla$/;
 
 /**
  * Replaces global fetch. Health, session (`/auth/me`), logout and the assignee directory
@@ -80,6 +85,10 @@ export function mockApi(handler: Handler = () => jsonResponse(500, {}), options:
       const events = options.events ?? EMPTY_EVENTS;
       return typeof events === 'function' ? events(url) : jsonResponse(200, events);
     }
+    if (SLA_PATH.test(url.pathname)) {
+      const sla = options.sla ?? UNTRACKED_SLA;
+      return typeof sla === 'function' ? sla(url, init) : jsonResponse(200, sla);
+    }
     if (COMMENTS_PATH.test(url.pathname)) {
       const comments = options.comments ?? EMPTY_COMMENTS;
       if (typeof comments === 'function') return comments(url, init);
@@ -93,11 +102,18 @@ export function mockApi(handler: Handler = () => jsonResponse(500, {}), options:
 
 const PLUMBING = new Set(['/api/health', '/api/auth/me', '/api/users/assignees']);
 
-/** Calls made to the API, excluding health, session, assignee-directory, history and discussion requests. */
+/** Calls made to the API, excluding health, session, assignee-directory, history, discussion and SLA requests. */
 export function apiCalls(fetchMock: ReturnType<typeof mockApi>) {
   return fetchMock.mock.calls
     .map(([input, init]) => ({ url: new URL(String(input), 'http://localhost'), init: (init ?? {}) as RequestInit }))
-    .filter(call => !PLUMBING.has(call.url.pathname) && !EVENTS_PATH.test(call.url.pathname) && !COMMENTS_PATH.test(call.url.pathname));
+    .filter(call => !PLUMBING.has(call.url.pathname) && !EVENTS_PATH.test(call.url.pathname) && !COMMENTS_PATH.test(call.url.pathname) && !SLA_PATH.test(call.url.pathname));
+}
+
+/** Requests made to the SLA endpoint. */
+export function slaCalls(fetchMock: ReturnType<typeof mockApi>) {
+  return fetchMock.mock.calls
+    .map(([input]) => new URL(String(input), 'http://localhost'))
+    .filter(url => SLA_PATH.test(url.pathname));
 }
 
 /** Requests made to the discussion endpoint. */

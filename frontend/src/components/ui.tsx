@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import type { IncidentStatus, Severity } from '../api/types';
-import { SEVERITY_LABELS, STATUS_LABELS } from '../format';
+import type { IncidentStatus, Severity, SlaState } from '../api/types';
+import { SEVERITY_LABELS, SLA_STATE_LABELS, STATUS_LABELS } from '../format';
 
 export function SeverityBadge({ severity }: { severity: Severity }) {
   return (
@@ -20,6 +20,15 @@ export function Email({ value }: { value: string }) {
 
 export function StatusBadge({ status }: { status: IncidentStatus }) {
   return <span className={`badge status-${status}`}>{STATUS_LABELS[status]}</span>;
+}
+
+/** SLA state as text in a tinted badge: the label always carries the meaning, never colour alone. */
+export function SlaBadge({ state }: { state: SlaState }) {
+  return <span className={`badge sla-${state}`}>{SLA_STATE_LABELS[state]}</span>;
+}
+
+export function EscalatedBadge() {
+  return <span className="badge sla-escalated">Escalated</span>;
 }
 
 type AlertTone = 'error' | 'success' | 'info';

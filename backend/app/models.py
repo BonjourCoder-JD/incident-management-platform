@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from typing import Any
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, String, Text, func, text
+from sqlalchemy import Boolean, CheckConstraint, Computed, DateTime, Enum, ForeignKey, Index, Integer, SmallInteger, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
@@ -33,6 +33,15 @@ class CommentVisibility(str, enum.Enum):
     # public: the incident's reporter and all staff can read it. internal: responders and admins only.
     PUBLIC = "public"
     INTERNAL = "internal"
+
+class SlaTarget(str, enum.Enum):
+    RESPONSE = "response"
+    RESOLUTION = "resolution"
+
+class SlaPolicySource(str, enum.Enum):
+    # default: seeded by migration 0007 (no author). admin: created through the API by an admin.
+    DEFAULT = "default"
+    ADMIN = "admin"
 
 class IncidentEventAction(str, enum.Enum):
     CREATED = "created"
@@ -180,3 +189,117 @@ class IncidentComment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     author: Mapped[User] = relationship(lazy="joined")
+
+
+class SlaPolicyVersion(Base):
+    """One immutable version of the SLA policy (migration 0007).
+
+    A version applies to SLA cycles that start at or after its `created_at` (ties: highest id).
+    Versions are never edited or deleted (trigger); a change is a new version with a reason.
+    `created_at` is taken from the database clock while holding the SLA policy advisory lock,
+    so it can never precede the start of a cycle that was already visible (see app/sla.py).
+    """
+    __tablename__ = "sla_policy_versions"
+    __table_args__ = (
+        CheckConstraint("(source = 'admin') = (created_by IS NOT NULL)", name="ck_sla_policy_versions_author"),
+        CheckConstraint("char_length(reason) BETWEEN 1 AND 500", name="ck_sla_policy_versions_reason"),
+        Index("ix_sla_policy_versions_created_at_id", "created_at", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[SlaPolicySource] = mapped_column(_enum(SlaPolicySource, "sla_policy_source"), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    author: Mapped[User | None] = relationship(lazy="joined")
+    targets: Mapped[list["SlaPolicyTarget"]] = relationship(lazy="selectin", order_by="SlaPolicyTarget.severity")
+
+
+class SlaPolicyTarget(Base):
+    """Response and resolution targets for one severity in one policy version (append-only)."""
+    __tablename__ = "sla_policy_targets"
+    __table_args__ = (
+        CheckConstraint("response_minutes BETWEEN 1 AND 43200", name="ck_sla_policy_targets_response"),
+        CheckConstraint("resolution_minutes BETWEEN 1 AND 525600", name="ck_sla_policy_targets_resolution"),
+        CheckConstraint("response_minutes <= resolution_minutes", name="ck_sla_policy_targets_order"),
+    )
+
+    version_id: Mapped[int] = mapped_column(ForeignKey("sla_policy_versions.id", ondelete="RESTRICT"), primary_key=True)
+    severity: Mapped[Severity] = mapped_column(_enum(Severity, "incident_severity"), primary_key=True)
+    response_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    resolution_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class IncidentEscalation(Base):
+    """Append-only record of one automatic escalation (migration 0007).
+
+    Created only by the SLA worker, never by a person: `triggered_by` is always 'system'.
+    At most one row per incident, cycle and target (unique constraint), and only for a target
+    that was still outstanding, under the incident row lock, when it was recorded.
+    """
+    __tablename__ = "incident_escalations"
+    __table_args__ = (
+        UniqueConstraint("incident_id", "cycle", "target", name="uq_incident_escalations_incident_cycle_target"),
+        CheckConstraint("cycle >= 0", name="ck_incident_escalations_cycle"),
+        CheckConstraint("target <> 'response' OR cycle = 0", name="ck_incident_escalations_response_first_cycle"),
+        CheckConstraint("triggered_by = 'system'", name="ck_incident_escalations_system"),
+        Index("ix_incident_escalations_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="RESTRICT"), nullable=False)
+    cycle: Mapped[int] = mapped_column(Integer, nullable=False)
+    target: Mapped[SlaTarget] = mapped_column(_enum(SlaTarget, "sla_target"), nullable=False)
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    policy_version_id: Mapped[int] = mapped_column(ForeignKey("sla_policy_versions.id", ondelete="RESTRICT"), nullable=False)
+    triggered_by: Mapped[str] = mapped_column(String(16), nullable=False, server_default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class IncidentSlaCycle(Base):
+    """Stored SLA read model: one row per SLA cycle of an audited incident (migration 0007).
+
+    Maintained by app.sla_store in the same transaction as each incident change, under the
+    incident row lock; incident_events remains the source of truth, and app.sla derives the same
+    values from it independently (tests and `python -m app.cli sla-verify` compare the two).
+    A null policy_version_id means the cycle is not tracked (it started before any policy).
+    A trigger keeps history final: rows are never deleted, a completed cycle never changes, the
+    start and frozen policy version never change, and deadlines can only become stricter.
+    Ranks: 1 low, 2 medium, 3 high, 4 critical.
+    """
+    __tablename__ = "incident_sla_cycles"
+    __table_args__ = (
+        CheckConstraint("cycle >= 0", name="ck_incident_sla_cycles_cycle"),
+        CheckConstraint(
+            "cycle = 0 OR (response_rank IS NULL AND response_minutes IS NULL AND response_due_at IS NULL "
+            "AND response_warning_at IS NULL AND acknowledged_at IS NULL)",
+            name="ck_incident_sla_cycles_response_first_cycle",
+        ),
+        CheckConstraint("(policy_version_id IS NULL) = (resolution_minutes IS NULL)", name="ck_incident_sla_cycles_tracked"),
+        CheckConstraint("resolution_rank BETWEEN 1 AND 4 AND (response_rank IS NULL OR response_rank BETWEEN 1 AND 4)", name="ck_incident_sla_cycles_rank"),
+        # Outstanding targets, for overdue/approaching filters, backlog figures and the escalation worker.
+        Index("ix_incident_sla_cycles_open_resolution", "resolution_due_at",
+              postgresql_where=text("resolved_at IS NULL AND policy_version_id IS NOT NULL")),
+        Index("ix_incident_sla_cycles_open_response", "response_due_at",
+              postgresql_where=text("acknowledged_at IS NULL AND cycle = 0 AND policy_version_id IS NOT NULL")),
+        Index("ix_incident_sla_cycles_breached", "incident_id", "cycle",
+              postgresql_where=text("response_breached OR resolution_breached")),
+    )
+
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="RESTRICT"), primary_key=True)
+    cycle: Mapped[int] = mapped_column(Integer, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    policy_version_id: Mapped[int | None] = mapped_column(ForeignKey("sla_policy_versions.id", ondelete="RESTRICT"), nullable=True)
+    response_rank: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    response_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    response_warning_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_rank: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    resolution_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    resolution_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_warning_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    response_breached: Mapped[bool | None] = mapped_column(Boolean, Computed("acknowledged_at > response_due_at", persisted=True))
+    resolution_breached: Mapped[bool | None] = mapped_column(Boolean, Computed("resolved_at > resolution_due_at", persisted=True))

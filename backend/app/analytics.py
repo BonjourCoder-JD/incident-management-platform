@@ -16,14 +16,16 @@ from datetime import date, timedelta
 from typing import Annotated, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import Connection, Date, Select, and_, case, cast, exists, extract, func, select, text
+from sqlalchemy import Connection, Date, DateTime, Select, and_, bindparam, case, cast, exists, extract, func, or_, select, text
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
 
 from .auth import CurrentUser
 from .database import engine
 from .incidents import _visible_to
-from .models import Incident, IncidentEvent, IncidentEventAction, IncidentStatus, Severity, User, UserRole
+from . import sla_store
+from .sla import Now
+from .models import Incident, IncidentEscalation, IncidentEvent, IncidentEventAction, IncidentSlaCycle, IncidentStatus, Severity, User, UserRole
 from .schemas import (
     AnalyticsRange,
     AnalyticsSummary,
@@ -31,6 +33,8 @@ from .schemas import (
     ResolutionMetrics,
     SeverityCount,
     SeverityResolution,
+    SlaAnalytics,
+    SlaComplianceCounts,
     StatusCount,
     TrendPoint,
 )
@@ -224,12 +228,64 @@ def build_queries(user: User, window: Window) -> dict[str, Select]:
     }
 
 
+def sla_queries(user: User, window: Window, now) -> dict[str, Select]:
+    """SLA figures from the stored read model; every candidate set is restricted with _visible_to."""
+    in_range = _visible_to(select(Incident.id.label("id")).where(window.contains(Incident.created_at)), user)
+    first = sla_store.cycle_rows(in_range, now).subquery("sla_first_cycles")
+    # Current backlog: open incidents with an outstanding target (an unresolved cycle is always current).
+    n = bindparam("sla_now", now, type_=DateTime(timezone=True))
+    c = IncidentSlaCycle
+    overdue = or_(sla_store.response_overdue(c, n), sla_store.resolution_overdue(c, n))
+    approaching = or_(sla_store.response_approaching(c, n), sla_store.resolution_approaching(c, n))
+    backlog = _visible_to(
+        select(Incident.severity, case((overdue, "overdue"), else_="approaching").label("state"), func.count(func.distinct(Incident.id)))
+        .join(c, c.incident_id == Incident.id)
+        .where(Incident.status.in_(OPEN), or_(overdue, approaching))
+        .group_by(Incident.severity, text("2")),
+        user,
+    )
+    return {
+        "first_cycle": select(first.c.response_state, first.c.resolution_state, func.count())
+        .where(first.c.cycle == 0)
+        .group_by(first.c.response_state, first.c.resolution_state),
+        "backlog": backlog,
+        "escalations": select(func.count()).select_from(IncidentEscalation).where(window.contains(IncidentEscalation.created_at)),
+    }
+
+
+def _compliance(counts: dict[str, int]) -> SlaComplianceCounts:
+    return SlaComplianceCounts(
+        met=counts.get("met", 0),
+        breached=counts.get("breached", 0),
+        outstanding=sum(counts.get(s, 0) for s in ("on_track", "approaching", "overdue")),
+        not_tracked=counts.get("not_tracked", 0),
+    )
+
+
+def compute_sla(conn: Connection, user: User, window: Window, now) -> SlaAnalytics:
+    q = sla_queries(user, window, now)
+    response: dict[str, int] = {}
+    resolution: dict[str, int] = {}
+    for response_state, resolution_state, count in conn.execute(q["first_cycle"]).all():
+        response[response_state] = response.get(response_state, 0) + count
+        resolution[resolution_state] = resolution.get(resolution_state, 0) + count
+    backlog = {(severity, state): count for severity, state, count in conn.execute(q["backlog"]).all()}
+    staff = user.role != UserRole.REPORTER
+    return SlaAnalytics(
+        response=_compliance(response),
+        resolution=_compliance(resolution),
+        overdue_by_severity=[SeverityCount(severity=s, count=backlog.get((s, "overdue"), 0)) for s in Severity],
+        approaching_by_severity=[SeverityCount(severity=s, count=backlog.get((s, "approaching"), 0)) for s in Severity],
+        escalations=conn.execute(q["escalations"]).scalar_one() if staff else None,
+    )
+
+
 def _hours(value) -> float | None:
     # Two decimals (36 s) so short resolutions are not reported as zero.
     return None if value is None else round(float(value), 2)
 
 
-def compute_summary(conn: Connection, user: User, window: Window) -> AnalyticsSummary:
+def compute_summary(conn: Connection, user: User, window: Window, now) -> AnalyticsSummary:
     q = build_queries(user, window)
     by_status = dict(conn.execute(q["by_status"]).all())
     by_severity = dict(conn.execute(q["by_severity"]).all())
@@ -276,6 +332,7 @@ def compute_summary(conn: Connection, user: User, window: Window) -> AnalyticsSu
                 for s in Severity
             ],
         ),
+        sla=compute_sla(conn, user, window, now),
     )
 
 
@@ -283,9 +340,10 @@ def compute_summary(conn: Connection, user: User, window: Window) -> AnalyticsSu
 def analytics_summary(
     user: CurrentUser,
     conn: AnalyticsConnection,
+    now: Now,
     start_date: Annotated[date | None, Query(alias="from")] = None,
     end_date: Annotated[date | None, Query(alias="to")] = None,
     tz: Annotated[str, Query(max_length=64)] = "UTC",
 ):
     window = resolve_window(conn, start_date, end_date, tz)
-    return compute_summary(conn, user, window)
+    return compute_summary(conn, user, window, now)

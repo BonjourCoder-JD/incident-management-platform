@@ -1,4 +1,7 @@
-import { COMMENT_MAX_LENGTH, TITLE_MAX_LENGTH, type IncidentCreate, type Severity } from './api/types';
+import {
+  COMMENT_MAX_LENGTH, SLA_REASON_MAX_LENGTH, SLA_RESOLUTION_MAX_MINUTES, SLA_RESPONSE_MAX_MINUTES, TITLE_MAX_LENGTH,
+  type IncidentCreate, type Severity, type SlaPolicyCreate,
+} from './api/types';
 import type { FieldErrors } from './api/client';
 
 /** Form state for the editable incident fields. Strings so inputs stay controlled. */
@@ -75,4 +78,65 @@ export function validateComment(value: string): string | undefined {
   if (COMMENT_FORBIDDEN.test(body)) return 'Comments cannot contain control characters.';
   if ([...body].length > COMMENT_MAX_LENGTH) return `Comments can be at most ${COMMENT_MAX_LENGTH.toLocaleString('en-US')} characters.`;
   return undefined;
+}
+
+// ---- SLA policy ------------------------------------------------------------------------
+// Same rules as the API (backend/app/schemas.py, SlaPolicyCreate).
+
+/** Strictest first, as the server compares them. */
+export const SLA_SEVERITY_ORDER: Severity[] = ['critical', 'high', 'medium', 'low'];
+
+export type SlaPolicyFormValues = {
+  reason: string;
+  targets: Record<Severity, { response: string; resolution: string }>;
+};
+
+function wholeMinutes(value: string, max: number): number | string {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return 'Enter a whole number of minutes.';
+  const minutes = Number(trimmed);
+  if (minutes < 1) return 'Enter at least 1 minute.';
+  if (minutes > max) return `Enter at most ${max.toLocaleString('en-US')} minutes.`;
+  return minutes;
+}
+
+/** Field errors keyed `<severity>-response`, `<severity>-resolution`, `reason` and `form`. */
+export function validateSlaPolicy(values: SlaPolicyFormValues): FieldErrors {
+  const errors: FieldErrors = {};
+  const parsed: Partial<Record<Severity, { response: number; resolution: number }>> = {};
+  for (const severity of SLA_SEVERITY_ORDER) {
+    const response = wholeMinutes(values.targets[severity].response, SLA_RESPONSE_MAX_MINUTES);
+    const resolution = wholeMinutes(values.targets[severity].resolution, SLA_RESOLUTION_MAX_MINUTES);
+    if (typeof response === 'string') errors[`${severity}-response`] = response;
+    if (typeof resolution === 'string') errors[`${severity}-resolution`] = resolution;
+    if (typeof response === 'number' && typeof resolution === 'number') {
+      if (response > resolution) errors[`${severity}-response`] = 'The response target cannot be longer than the resolution target.';
+      else parsed[severity] = { response, resolution };
+    }
+  }
+  if (Object.keys(errors).length === 0) {
+    for (let i = 0; i < SLA_SEVERITY_ORDER.length - 1; i += 1) {
+      const stricter = parsed[SLA_SEVERITY_ORDER[i]]!;
+      const lighter = parsed[SLA_SEVERITY_ORDER[i + 1]]!;
+      if (stricter.response > lighter.response || stricter.resolution > lighter.resolution) {
+        errors.form = 'A more severe incident cannot have a longer target than a less severe one.';
+        break;
+      }
+    }
+  }
+  const reason = values.reason.trim();
+  if (!reason) errors.reason = 'Enter a reason for the change.';
+  else if (reason.length > SLA_REASON_MAX_LENGTH) errors.reason = `The reason can be at most ${SLA_REASON_MAX_LENGTH} characters.`;
+  return errors;
+}
+
+export function toSlaPolicyPayload(values: SlaPolicyFormValues): SlaPolicyCreate {
+  return {
+    reason: values.reason.trim(),
+    targets: SLA_SEVERITY_ORDER.map(severity => ({
+      severity,
+      response_minutes: Number(values.targets[severity].response.trim()),
+      resolution_minutes: Number(values.targets[severity].resolution.trim()),
+    })),
+  };
 }

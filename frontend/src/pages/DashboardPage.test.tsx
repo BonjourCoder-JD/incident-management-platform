@@ -31,6 +31,17 @@ function summary(overrides: Partial<AnalyticsSummary> = {}): AnalyticsSummary {
         { severity: 'high', resolved_count: 4, median_hours: 20 }, { severity: 'critical', resolved_count: 1, median_hours: 0.25 },
       ],
     },
+    sla: {
+      response: { met: 6, breached: 2, outstanding: 3, not_tracked: 1 },
+      resolution: { met: 5, breached: 1, outstanding: 5, not_tracked: 1 },
+      overdue_by_severity: [
+        { severity: 'low', count: 0 }, { severity: 'medium', count: 1 }, { severity: 'high', count: 2 }, { severity: 'critical', count: 1 },
+      ],
+      approaching_by_severity: [
+        { severity: 'low', count: 1 }, { severity: 'medium', count: 0 }, { severity: 'high', count: 1 }, { severity: 'critical', count: 0 },
+      ],
+      escalations: 3,
+    },
     ...overrides,
   };
 }

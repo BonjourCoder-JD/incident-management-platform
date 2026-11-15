@@ -56,6 +56,7 @@ export POSTGRES_USER="incident"
 export POSTGRES_DB="incidents"
 POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 E2E_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+E2E_SLA_REPORTER_PASSWORD="$(openssl rand -hex 24)"
 export POSTGRES_PASSWORD E2E_ADMIN_PASSWORD
 export BOOTSTRAP_ADMIN_PASSWORD="$E2E_ADMIN_PASSWORD"
 export E2E_ADMIN_EMAIL="e2e.admin@example.com"
@@ -63,6 +64,7 @@ export E2E_RUN_ID="${E2E_RUN_ID:-$(openssl rand -hex 3)}"
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   echo "::add-mask::$POSTGRES_PASSWORD"
   echo "::add-mask::$E2E_ADMIN_PASSWORD"
+  echo "::add-mask::$E2E_SLA_REPORTER_PASSWORD"
 fi
 
 trap on_exit EXIT
@@ -83,6 +85,21 @@ E2E_LEGACY_READONLY_ID="$(sed -n 1p <<<"$legacy_ids")"
 E2E_LEGACY_RESOLVE_ID="$(sed -n 2p <<<"$legacy_ids")"
 export E2E_LEGACY_READONLY_ID E2E_LEGACY_RESOLVE_ID
 
+# Synthetic SLA scenarios with back-dated audit events (Milestone 5B), then the real escalation
+# command twice: the tests check that the first run recorded exactly one escalation and the second none.
+export E2E_SLA_REPORTER_PASSWORD
+eval "$("${COMPOSE[@]}" exec -T -e E2E_SLA_REPORTER_PASSWORD backend python - < e2e/seed_sla.py)"
+escalation_counts=""
+for _ in 1 2; do
+  run_output="$("${COMPOSE[@]}" exec -T backend python -m app.cli sla-escalate 2>/dev/null)"
+  echo "$run_output"
+  escalation_counts+="$(grep -oE '[0-9]+ recorded' <<<"$run_output" | grep -oE '^[0-9]+') "
+done
+read -r E2E_SLA_FIRST_RUN_RECORDED E2E_SLA_SECOND_RUN_RECORDED <<<"$escalation_counts"
+export E2E_SLA_REPORTER_EMAIL E2E_SLA_OVERDUE_ID E2E_SLA_APPROACHING_ID E2E_SLA_MET_ID E2E_SLA_BREACHED_ID E2E_SLA_REOPENED_ID
+export E2E_SLA_FIRST_RUN_RECORDED E2E_SLA_SECOND_RUN_RECORDED
+"${COMPOSE[@]}" exec -T backend python -m app.cli sla-verify  # stored SLA cycles match the audit trail
+
 echo "Waiting for the frontend and API…"
 for _ in $(seq 1 60); do
   if "${COMPOSE[@]}" exec -T frontend wget -qO- http://localhost:5173/api/health 2>/dev/null | grep -q '"ok"'; then
@@ -98,7 +115,12 @@ else
   MSYS_NO_PATHCONV=1 docker run --rm --init \
     --network "container:${PROJECT}-frontend-1" \
     -e CI -e E2E_ADMIN_EMAIL -e E2E_ADMIN_PASSWORD -e E2E_RUN_ID \
+    -e E2E_SLA_REPORTER_EMAIL -e E2E_SLA_REPORTER_PASSWORD -e E2E_SLA_OVERDUE_ID -e E2E_SLA_APPROACHING_ID -e E2E_SLA_MET_ID \
+    -e E2E_SLA_BREACHED_ID -e E2E_SLA_REOPENED_ID -e E2E_SLA_FIRST_RUN_RECORDED -e E2E_SLA_SECOND_RUN_RECORDED \
     -e E2E_LEGACY_READONLY_ID -e E2E_LEGACY_RESOLVE_ID -e E2E_BASE_URL="http://localhost:5173" \
     -v "$(host_path "$PWD/e2e"):/e2e" -w /e2e "$PLAYWRIGHT_IMAGE" \
     bash -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test "$@"' playwright "$@"
 fi
+
+# Everything the suite did through the UI and API must still match the audit trail.
+"${COMPOSE[@]}" exec -T backend python -m app.cli sla-verify

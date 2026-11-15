@@ -49,8 +49,111 @@ export interface Incident {
   updated_at: string;
 }
 
+// ---- SLA (Milestone 5B) -----------------------------------------------------------------
+
+export const SLA_STATES = ['on_track', 'approaching', 'overdue', 'met', 'breached', 'not_tracked'] as const;
+export type SlaState = (typeof SLA_STATES)[number];
+export type SlaTargetName = 'response' | 'resolution';
+/** List filter values; `escalated` is for responders and admins only. */
+export const SLA_FILTERS = ['overdue', 'approaching', 'breached', 'escalated'] as const;
+export type SlaFilter = (typeof SLA_FILTERS)[number];
+
+export function isSlaFilter(value: unknown): value is SlaFilter {
+  return typeof value === 'string' && (SLA_FILTERS as readonly string[]).includes(value);
+}
+
+export interface SlaSummary {
+  state: Exclude<SlaState, 'not_tracked'>;
+  target: SlaTargetName;
+  due_at: string;
+}
+
+export interface IncidentListItem extends Incident {
+  /** null when the incident is not tracked. */
+  sla: SlaSummary | null;
+  /** Staff only; always null for reporters. */
+  escalated: boolean | null;
+}
+
+export interface SlaTargetStatus {
+  target_minutes: number | null;
+  severity: Severity | null;
+  due_at: string | null;
+  warning_at: string | null;
+  satisfied_at: string | null;
+  state: SlaState;
+}
+
+export interface SlaCycle {
+  cycle: number;
+  started_at: string;
+  policy_version_id: number | null;
+  tracked: boolean;
+  response: SlaTargetStatus | null;
+  resolution: SlaTargetStatus;
+}
+
+export interface SlaEscalation {
+  id: number;
+  cycle: number;
+  target: SlaTargetName;
+  deadline_at: string;
+  created_at: string;
+  triggered_by: 'system';
+}
+
+export interface IncidentSla {
+  /** Server time used for every state; the browser clock is never authoritative. */
+  now: string;
+  tracked: boolean;
+  current_cycle: number;
+  cycles: SlaCycle[];
+  /** Staff only; null for reporters. */
+  escalations: SlaEscalation[] | null;
+}
+
+export interface SlaPolicyTarget {
+  severity: Severity;
+  response_minutes: number;
+  resolution_minutes: number;
+}
+
+export interface SlaPolicy {
+  id: number;
+  source: 'default' | 'admin';
+  reason: string;
+  author: UserSummary | null;
+  created_at: string;
+  targets: SlaPolicyTarget[];
+}
+
+export interface SlaPolicyCreate {
+  reason: string;
+  targets: SlaPolicyTarget[];
+}
+
+export const SLA_RESPONSE_MAX_MINUTES = 30 * 24 * 60;
+export const SLA_RESOLUTION_MAX_MINUTES = 365 * 24 * 60;
+export const SLA_REASON_MAX_LENGTH = 500;
+
+export interface SlaComplianceCounts {
+  met: number;
+  breached: number;
+  outstanding: number;
+  not_tracked: number;
+}
+
+export interface SlaAnalytics {
+  response: SlaComplianceCounts;
+  resolution: SlaComplianceCounts;
+  overdue_by_severity: { severity: Severity; count: number }[];
+  approaching_by_severity: { severity: Severity; count: number }[];
+  /** Staff only; null for reporters. */
+  escalations: number | null;
+}
+
 export interface IncidentPage {
-  items: Incident[];
+  items: IncidentListItem[];
   total: number;
   limit: number;
   offset: number;
@@ -154,6 +257,7 @@ export interface AnalyticsSummary {
     excluded_legacy: number;
     by_severity: { severity: Severity; resolved_count: number; median_hours: number | null }[];
   };
+  sla: SlaAnalytics;
 }
 
 export interface IncidentListParams {
@@ -161,6 +265,7 @@ export interface IncidentListParams {
   offset: number;
   severity?: Severity;
   status?: IncidentStatus;
+  sla?: SlaFilter;
 }
 
 export const TITLE_MAX_LENGTH = 200;

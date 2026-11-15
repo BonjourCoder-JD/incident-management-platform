@@ -7,6 +7,7 @@ export type Route =
   | { name: 'new' }
   | { name: 'detail'; id: number }
   | { name: 'users' }
+  | { name: 'sla' }
   | { name: 'account' }
   | { name: 'dashboard'; search: URLSearchParams }
   | { name: 'notFound' };
@@ -18,6 +19,7 @@ export function parseRoute(pathname: string, search: string): Route {
   if (path === '/' || path === '/incidents') return { name: 'list', search: new URLSearchParams(search) };
   if (path === '/incidents/new') return { name: 'new' };
   if (path === '/users') return { name: 'users' };
+  if (path === '/sla') return { name: 'sla' };
   if (path === '/account') return { name: 'account' };
   if (path === '/dashboard') return { name: 'dashboard', search: new URLSearchParams(search) };
   const match = /^\/incidents\/([1-9]\d{0,9})$/.exec(path);

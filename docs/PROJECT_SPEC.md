@@ -1,6 +1,6 @@
 # Project Specification — Security Incident Management Platform
 
-Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed · Milestone 4 (secure CSV export) complete — commit `02eba64`, CI run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) passed · Milestone 5 (end-to-end tests) complete — commits `13d3c34`, `7e65e81`, `dea4ba7`, CI run [43726750357](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43726750357) passed (all five jobs) · Milestone 5A (comments and internal notes) complete — commit `ddc571e`, CI run [43749980036](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43749980036) passed (all five jobs) · Roadmap expanded on 2026-11-15 (Milestones 5, 5A, 5B, 5C, 6 and a final presentation, all **Planned**)
+Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed · Milestone 4 (secure CSV export) complete — commit `02eba64`, CI run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) passed · Milestone 5 (end-to-end tests) complete — commits `13d3c34`, `7e65e81`, `dea4ba7`, CI run [43726750357](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43726750357) passed (all five jobs) · Milestone 5B (SLA tracking and escalation) implemented and verified locally, **not yet committed** · Milestone 5A (comments and internal notes) complete — commit `ddc571e`, CI run [43749980036](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43749980036) passed (all five jobs) · Roadmap expanded on 2026-11-15 (Milestones 5, 5A, 5B, 5C, 6 and a final presentation, all **Planned**)
 
 A full-stack application for reporting, triaging and resolving security incidents. It is intended to be employer-ready: working end to end, tested automatically, secure by default, and documented.
 
@@ -79,6 +79,10 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 | Post public comments | Own incidents only | All | All |
 | Post internal notes | ✗ (403) | All | All |
 | Edit or delete comments | ✗ (no endpoint) | ✗ (no endpoint) | ✗ (no endpoint) |
+| View SLA targets, states and deadlines | Own incidents only | All | All |
+| View escalation details and the escalated filter | ✗ (never returned; filter 403) | All | All |
+| Read the current SLA policy | ✓ | ✓ | ✓ |
+| Create SLA policy versions, view version history | ✗ (403) | ✗ (403) | ✓ (reason required) |
 
 - Incidents a reporter may not see return **404**, identical to a missing incident, so their existence is not revealed.
 - Ownership (`reporter_id`) is always taken from the session; a client-supplied `reporter_id` is rejected (422).
@@ -168,6 +172,25 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 | Frontend | "Discussion" section on the detail page above History. Internal notes carry the text "Internal note" and "Not visible to the reporter" and a tinted border (`--internal` tone, contrast-checked on that background). Staff choose visibility with a labelled radio group that **defaults to Internal note** (D3); the submit button names the choice ("Add internal note" / "Post public reply") and a public reply shows "The reporter will see this reply." (linked to the textarea). Reporters have no visibility control. Character counter in code points, a polite announcement only near the limit, field errors linked with `aria-describedby`, "Comment posted." / "Internal note added." announced, focus returned to the textarea. | A "Reporter" badge is derived in the browser from the incident's reporter (D8); no role data is added to the API. |
 | Out of scope | No visibility filter parameter (D9); comments are not in the CSV export or dashboard (D10); no rate limit on posting (D11, ISSUE-19); comments are allowed on every status (D6). | — |
 
+### SLA design (Milestone 5B)
+
+Approved decisions D1–D14 (2026-11-15) with refinements 1–10, and the performance refinement (stored read model, batched worker).
+
+| Topic | Decision | Notes and limits |
+|---|---|---|
+| Targets (D1) | Per severity, in minutes: critical 15 / 240, high 60 / 1,440, medium 240 / 4,320, low 1,440 / 10,080 (response / resolution). Calendar time, 24×7 (D9). | Response 1–43,200 min, resolution 1–525,600 min, response ≤ resolution, and a more severe incident never has a longer target than a less severe one (API and database). |
+| Acknowledgment (D2) | The first audited event that moves the status away from `open` or sets an assignee (both staff-only). A staff-created incident with an assignee is acknowledged at creation. Comments and internal notes never count; acknowledgment is never reversed. | — |
+| Cycles (D3) | Cycle 0 starts at creation; every reopen (resolved/closed → open/investigating) starts the next cycle with a new resolution target. The response target exists in cycle 0 only. Earlier cycles keep their final met/breached outcome. | The dashboard reports first-cycle compliance; every cycle is on the detail page and in `GET /incidents/{id}/sla`. |
+| Severity and policy (D5, D8) | The policy version is frozen at cycle start (latest version with `created_at` ≤ the start; ties: highest id). Targets use the strictest severity held from the cycle start until the target is satisfied; deadlines are measured from the original start, so a severity change never resets the clock or relaxes a target. A satisfying event's own severity change does not count for that target. | Incident writes take a shared advisory lock and policy changes an exclusive one, with `created_at` from the database clock, so a new version is always later than any cycle start already being committed. |
+| States (D4) | `on_track`, `approaching` (from 75% of the target), `overdue` (at or after the deadline), `met` (satisfied at or before the deadline), `breached` (satisfied after it), `not_tracked`. The list shows the most urgent current target. | Badges always carry the state as text. |
+| Clock (D11) | The database clock (`clock_timestamp()`) through an injectable `get_now` dependency; responses include `now` and the browser computes relative times from it plus monotonic time, never from `Date.now()`. | Tests freeze the clock; no production code path accepts a clock override. |
+| Not tracked (D10) | Legacy incidents (no `created` event) and cycles that started before the first policy version. | So deploying `0007` creates no escalation flood. |
+| Stored read model | `incident_sla_cycles`: one row per cycle, maintained by an incremental algorithm (`app/sla_store.py`) in the same transaction as each incident change, under the incident row lock. `incident_events` remains the source of truth; `app/sla.py` derives the same values from it independently. | A trigger keeps history final: no deletes, a completed cycle never changes, start and policy version never change, an acknowledged response is final, and deadlines can only become stricter. |
+| Consistency | Every SLA scenario test ends by comparing the stored cycles with the audit-derived reference (`sla_store.verify`); `python -m app.cli sla-verify` does the same for a whole database (used by `e2e/run.sh` before and after the suite). | Migration 0007 backfills existing incidents with the same definitions (`BACKFILL_SQL`). |
+| Escalation (D6, D7, D12) | Append-only `incident_escalations` rows, `triggered_by = 'system'` (checked), unique per incident, cycle and target. The `sla-worker` service runs `python -m app.cli sla-escalate --loop` (60 s). A bounded run takes the worker advisory lock, reads up to 500 overdue targets from partial indexes, and processes them in batches of 100: lock the incident rows in id order, recheck and insert in one statement with `ON CONFLICT DO NOTHING`. | Satisfied targets are never escalated retrospectively. In-app indicators only (escalated badge, staff filter, dashboard count); email or webhook notification is deferred (ISSUE-21). After a full run the worker refreshes `incident_escalations` statistics (see benchmark). |
+| Visibility (D14) | Every SLA query is restricted with `_visible_to`; `GET /incidents/{id}/sla` uses `_get_visible` (same 404). Escalation details, the escalated flag and the escalated filter are staff-only. Reporters see their own incidents' targets and states. Nothing in the SLA code reads comments. | Canary tests prove internal notes never appear in SLA responses, lists, dashboards or exports. |
+| Export (D14) | Four columns: `response_due_utc`, `response_state` (first cycle), `resolution_due_utc`, `resolution_state` (current cycle). | The list's SLA filter does not apply to the export (ISSUE-20). |
+
 ### Data model
 
 **`users`** (migration `0002`)
@@ -224,6 +247,14 @@ Indexes: `ix_incidents_status_severity`, `ix_incidents_reporter_id`, `ix_inciden
 
 Indexes `ix_incident_comments_incident_id_visibility_id (incident_id, visibility, id)` and `ix_incident_comments_author_id`. A trigger rejects `UPDATE`, `DELETE`, `TRUNCATE`. There is no `updated_at`: comments never change.
 
+**`sla_policy_versions`** (migration `0007`): `id`, `source` (enum `sla_policy_source`: `default`, `admin`), `created_by` (FK → `users`, `RESTRICT`; required for `admin`), `reason` (1–500 characters), `created_at` (the time from which the version applies). Append-only (trigger). Version 1 is the seeded default.
+
+**`sla_policy_targets`** (migration `0007`): primary key (`version_id` FK → `sla_policy_versions`, `severity`), `response_minutes`, `resolution_minutes` (range and order checks). Append-only.
+
+**`incident_sla_cycles`** (migration `0007`): stored SLA read model. Primary key (`incident_id` FK → `incidents` `RESTRICT`, `cycle`); `started_at`; `policy_version_id` (null = not tracked); `response_rank`, `response_minutes`, `response_due_at`, `response_warning_at`, `acknowledged_at` (cycle 0 only); `resolution_rank`, `resolution_minutes`, `resolution_due_at`, `resolution_warning_at`, `resolved_at`; generated `response_breached` and `resolution_breached`. Partial indexes on outstanding response and resolution deadlines and on breached cycles. Guard trigger as described in *SLA design*.
+
+**`incident_escalations`** (migration `0007`): `id`, `incident_id` (FK `RESTRICT`), `cycle`, `target` (enum `sla_target`), `deadline_at`, `policy_version_id` (FK), `triggered_by` (always `system`), `created_at`; unique (`incident_id`, `cycle`, `target`); a response escalation only in cycle 0. Append-only.
+
 Indexes: `ix_incident_events_incident_id_id (incident_id, id)`, `ix_incident_events_actor_id`, and the partial `ix_incident_events_first_resolution (incident_id, created_at) WHERE status moved to resolved/closed` (migration `0004`).
 
 **Legacy data strategy (migration `0002`).** Every existing incident is preserved. Incidents created before accounts existed keep `reporter_id = NULL` and are visible to responders and admins only. Existing `assignee_id` values are set to `NULL`, because no users existed before this migration, so they could not refer to anyone; this step is not reversed by a downgrade. The downgrade otherwise removes the users and sessions tables, the ownership column, both foreign keys and the `user_role` type.
@@ -246,6 +277,11 @@ All `/incidents` and `/users` endpoints require a session (**401** otherwise). S
 | `GET` | `/incidents/{id}/events` | Any role (visibility applies) | Audit history newest first. `limit` 1–100 (default 20), `offset` ≥ 0. Returns `{items, total, limit, offset, users}`; each item is `{id, action, changes, actor: {id, email}, created_at}`. 404 when the incident is missing or not visible. No write methods (405). |
 | `GET` | `/incidents/{id}/comments` | Any role (visibility applies) | Discussion oldest first. `limit` 1–100 (default 50), `offset` ≥ 0. Returns `{items, total, limit, offset}`; each item is `{id, visibility, body, author: {id, email}, created_at}`. Reporters receive, and `total` counts, public comments only. 404 when the incident is missing or not visible. |
 | `POST` | `/incidents/{id}/comments` | Any role (visibility applies) | Body `{body, visibility}`, both required; unknown fields (such as `author_id`) 422. Reporters: `public` only (403 for `internal`). Body rules in *Comments and internal notes design*. 201 with the comment. No edit or delete routes (405). |
+| `GET` | `/incidents/{id}/sla` | Any role (visibility applies) | `{now, tracked, current_cycle, cycles, escalations}`; each cycle has `response` (cycle 0) and `resolution` with target minutes, effective severity, due and warning times, satisfaction time and state. `escalations` is null for reporters. 404 like the incident. |
+| `GET` | `/incidents?sla=overdue\|approaching\|breached\|escalated` | Any role (visibility applies) | SLA filter on the list; `escalated` is staff-only (403). Every list item carries `sla: {state, target, due_at}` or null, and `escalated` (null for reporters). |
+| `GET` | `/sla/policy` | Signed in | The current policy version and its targets. |
+| `GET` | `/sla/policy/versions` | Admin | Every version, newest first, with author and reason. |
+| `POST` | `/sla/policy/versions` | Admin | `{reason, targets: [4 × {severity, response_minutes, resolution_minutes}]}` (strict integers); 201. Applies to cycles that start afterwards. |
 | `GET` | `/exports/incidents.csv` | Any role (visibility applies) | Optional `severity`, `status`. Streams the CSV described in *CSV export design*. 413 above `EXPORT_MAX_ROWS` (default 10,000) with `X-Export-Row-Count`; 422 for invalid filters. Each request is recorded in `incident_exports`. Read-only (405 for writes). |
 | `GET` | `/analytics/summary` | Any role (visibility applies) | `from`, `to` (inclusive dates), `tz` (IANA). Returns `{scope, range, totals, by_status, by_severity, open_backlog_by_severity, trend, resolution}`; see *Analytics design*. 422 for invalid ranges or time zones. Read-only (405 for writes). |
 | `GET` | `/users/assignees` | Responder, admin | Active responders and admins as `{id, email}` |
@@ -258,6 +294,58 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 ---
 
 ## Completed functionality
+
+### Milestone 5B — SLA tracking and escalation
+
+Implemented and verified locally on 2026-11-15. **Not yet committed**; CI confirmation will be recorded here after the push. Design: *SLA design*; data model: `sla_policy_versions`, `sla_policy_targets`, `incident_sla_cycles`, `incident_escalations`.
+
+| Functionality | Status | Evidence |
+|---|---|---|
+| Exact boundaries with an injected clock: warning at 75%, due exactly now is overdue, satisfied exactly at the deadline is met, 1 µs later breached | **Verified (local)** | `backend/tests/test_sla.py` (boundary tests) |
+| Acknowledgment rules: status change from open or assignment, staff-created with assignee, comments, internal notes and reporter edits never count, never reversed | **Verified (local)** | `test_sla.py` |
+| Reopen cycles (all four resolved/closed → open/investigating moves), multiple reopens, response in cycle 0 only, earlier outcomes preserved and reconstructible | **Verified (local)** | `test_sla.py`, `test_sla_store.py` |
+| Strictest severity per target from the original start; lowering never relaxes; changes after satisfaction ignored; policy frozen at cycle start, boundary at equal timestamps and ties by id | **Verified (local)** | `test_sla.py`, `test_sla_policy.py` |
+| Stored read model equals the audit-derived reference in every field, state and filter (every scenario test, 60 random histories at 11 instants, migration backfill of 40 random histories, a reopened pre-policy incident, legacy incidents) | **Verified (local)** | `test_sla_store.py`, teardown check in `test_sla.py` and `test_escalation.py`; `sla-verify` before and after each end-to-end run |
+| History guard: no deletes or truncation, completed cycles final, start and version frozen, acknowledged response final, deadlines only stricter | **Verified (local)** | `test_sla_store.py` |
+| Transaction rollback: a failure after the SLA update rolls back the incident, its event and its cycle | **Verified (local)** | `test_sla_store.py::test_a_failed_change_rolls_back_the_incident_its_event_and_its_sla_cycle` |
+| Concurrent incident updates (12 simultaneous requests) are serialised and the read model stays consistent | **Verified (local)** | `test_sla_store.py::test_concurrent_updates_are_serialised_and_the_read_model_stays_consistent` |
+| Escalation: once per target, only when overdue, never retrospective, per cycle, untracked/closed/legacy ignored, no change to the incident or its history, logs without content | **Verified (local)** | `backend/tests/test_escalation.py` |
+| Escalation concurrency: resolution committed while the worker waits, worker first then resolution, two concurrent escalations of one target, two concurrent worker runs, policy change waits for in-flight incident writes | **Verified (local)** | `test_escalation.py` (real transactions) |
+| Admin-only policy versions with reason, validation (strict integers, bounds, ordering), CSRF, append-only history; new versions apply only to newly started cycles | **Verified (local)** | `backend/tests/test_sla_policy.py`; `test_auth.py` CSRF inventory |
+| RBAC and confidentiality: incident visibility (same 404), staff-only escalation details and filter, reporter-scoped filters, dashboard and export, no internal notes in any SLA response, list, dashboard or export | **Verified (local)** | `test_sla.py` (canary and scope tests); `e2e/tests/sla.spec.ts` |
+| SLA card (server clock, never the browser clock, 60 s refresh, states as text, reopen note, earlier periods, staff-only escalations), list column and URL filter, dashboard SLA section, admin policy page with review step | **Verified (local)** | `frontend/src/components/IncidentSla.test.tsx`, `pages/IncidentListSla.test.tsx`, `pages/SlaPolicyPage.test.tsx`, `validation.test.ts` (28 new tests) |
+| End to end: seeded scenarios, real escalation command run twice (1 then 0 recorded), staff filters and escalation, reporter view without escalations, outcomes of met/breached/reopened incidents, cross-reporter 404, admin policy change and refusals | **Verified (local)** | `e2e/tests/sla.spec.ts` (6 tests), `e2e/seed_sla.py`, `e2e/run.sh` |
+| Accessibility: axe scans of the SLA card with an escalation, the SLA-filtered list and the policy page (error and review states) in both themes; 390 px layouts | **Verified (local)** | `e2e/tests/accessibility.spec.ts` (2 new tests, phone tests extended) |
+| Migration `0007` upgrade, downgrade, re-upgrade with data and backfill; `alembic check` | **Verified (local)** | see *Migration* below |
+
+**Results (local, 2026-11-15):** backend **390 passed** (269 before; 121 new) in the CI-equivalent sequence; frontend **141 passed** (113 before; 28 new), type check and production build clean; end to end **54 tests** (45 before; 9 new): **three consecutive runs, 54/54 each**, on freshly built disposable stacks (about 2 minutes of test time; 227–237 s per run including build and teardown). In every run the real escalation command recorded 1 escalation and then 0, and `sla-verify` reported the stored cycles consistent with the audit trail before the suite (6 cycles) and after it (65 cycles). The Docker volume list was identical before and after. An earlier full run failed on three items, all fixed before the recorded runs: the escalated-filter defect, the export column list (new SLA columns) and the dashboard tile wording (see below).
+
+**Benchmark (50,000-incident dataset).** The Milestone 3 seed with its shape unchanged (50,000 incidents, 225,547 events; 20,144 open or investigating, 29,856 resolved or closed, 5,000 legacy, 9,712 reopened; largest reporter 263 incidents), with two additions so SLA can be measured: `created` events record the initial severity, as the API always does, and a policy version three years old. Backfill of the stored cycles: 47,591 cycles (2,591 reopened) in 1.9 s; consistency check of every cycle in 2.7 s: **0 mismatches**. Medians of 7 requests after 2 warm-ups, through the real endpoints (PostgreSQL 17.12, default settings):
+
+| Request | Audit-derived (first design) | Stored read model | Target |
+|---|---|---|---|
+| Staff `?sla=overdue` / `approaching` / `breached` / `escalated` | 243 / 236 / 590 / 229 ms | **51 / 45 / 64 / 13 ms** (59 ms escalated after 29,544 escalations) | < 300 ms |
+| Staff dashboard 30 days / 366 days | 352 / 748 ms | **110 / 222 ms** | < 300 ms |
+| Reporter filters and 366-day dashboard | 62–89 ms | **45–71 ms** | < 300 ms |
+| Worker: one bounded run (500 targets, 5 batches) | 7.8 s | **148 ms** (batches 19–27 ms) | < 1 s |
+| Worker: clearing a 29,524-target backlog | ~8 min (estimated from 15.7 ms per target) | **7.9 s** in 61 runs (median run 129 ms, max 218 ms; batch median 16.7 ms, max 113 ms) | < 1 s per run |
+| Worker: steady state / 20 newly overdue targets | 385 / 612 ms | **27 / 40 ms** | < 1 s |
+
+Query plans (stored model): the approaching and escalated filters use the partial indexes (`ix_incident_sla_cycles_open_response`, `_open_resolution`) and run in under 1 ms; overdue, breached, the dashboard backlog and 366-day figures scan the 47,591-row cycle table (16–32 ms) because they match most open incidents in this dataset; the worker's due-target query takes 26 ms. Earlier findings on the way: the first derived formulation took 54 s for the overdue filter (a policy subquery repeated inside every state expression, which also triggered 4.4 s of JIT compilation); it was rewritten before the stored model was approved.
+
+**Migration:** upgrade `0001`→`0007`, `alembic check` clean, downgrade to base leaves no tables or enum types, re-upgrade and check clean. With data present (an incident created through the write path, a policy and a cycle): the append-only policy table refused an UPDATE; downgrading to `0006` removed every SLA table, enum and function while incidents, events and comments remained; re-upgrading backfilled the incident's cycle (untracked, because it started before the new policy) and `sla-verify` reported it consistent.
+
+**Deliberate-break checks** (scratch copies; each disabled one protection): backend 19 variants — SLA detail without incident visibility, escalations shown to reporters, escalated filter or flag for reporters, policy change without the admin check, write path without the policy lock, worker ignoring target state, worker without the row lock, reopen not starting a cycle, severity relaxing a target, the satisfying event's severity counted, policy not frozen, comments counted as acknowledgment, strict deadline boundary, strict overdue filter boundary, escalated filter uncorrelated, breached filter ignoring the response, dashboard counting every cycle: **18 caught**. The survivor removes `ON CONFLICT DO NOTHING` from the worker insert; it is equivalent in behaviour, because the recheck runs under the incident row lock and sees any committed escalation, and the unique constraint is tested directly. Two of the caught variants (dashboard, filter boundary) needed new tests, added before the final runs. Frontend 6 variants — browser clock used, escalated filter offered to reporters, state shown by colour only, policy saved without the review step, ordering rule removed, no periodic refresh: **6 caught**. End to end 3 variants — escalated filter uncorrelated, escalations shown to reporters, policy change without the admin check: **3 caught**.
+
+**Defects found and fixed during implementation (new code, before any commit):**
+- **Performance:** see the benchmark; the stored read model and batched worker were approved and implemented.
+- **Dashboard cross join:** the first-cycle figures filtered on the unaliased cycle table, multiplying counts (reporter test caught it).
+- **Escalated filter correlation:** the current-cycle subquery took the highest cycle of all incidents, so the staff "Escalated" filter showed nothing (end-to-end test caught it; regression tests added).
+- **Reference scope:** the audit-derived reference emitted untracked cycles for legacy incidents that had later status changes, while the store (correctly) has none: 4,088 differences in the 50,000-incident backfill check. The reference now excludes legacy incidents; 0 differences.
+- **Planner statistics during bulk escalation:** two runs took about 1 s while clearing the 29,524-target backlog because `incident_escalations` statistics lagged its growth; the worker now analyses it after a full run (max run 218 ms).
+- **Wording:** the dashboard's SLA tiles said "still open", which an existing end-to-end locator also matched; they now say "outstanding".
+
+**Security review of changed files:** no credentials or real data (synthetic `example.com` users, random per-run passwords for the end-to-end SLA reporter, canary strings); no generated artifacts in the change set. No new dependencies; `pip-audit` no known vulnerabilities; `npm audit` 0 for `frontend` and `e2e`; actionlint no findings; backend and frontend images build.
 
 ### Milestone 5A — Incident comments and internal notes
 
@@ -469,7 +557,7 @@ Committed as `1ae693b52ed41bbcc274df03fcfa8d1ec6a64e22` on 2026-11-15 and verifi
 | CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | Latest: GitHub Actions run [43749980036](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43749980036) on `ddc571e` (Milestone 5A): all five jobs **success** (End-to-end tests: 45 passed). Milestone 5: run [43726750357](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43726750357) on `dea4ba7` (Milestone 5): all **five** jobs **success**, including End-to-end tests (38 passed). Milestone 4: run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) on `02eba64`: all four jobs **success**. Milestone 3: run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) on `7240e3a`: all four jobs **success**. Milestone 2: run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) on `ec3ed2e`: all four jobs **success**. Milestone 1: run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
 | Supply chain | Lockfile with `npm ci`; read-only CI token; no repository secrets | **Implemented** | `frontend/package-lock.json`, `ci.yml` |
 
-**Test counts:** 269 backend (pytest), 113 frontend (Vitest + React Testing Library), 45 end-to-end (Playwright), including Milestone 5A (CI run 43749980036: all five jobs passed; 45 end-to-end tests passed in CI). After Milestone 5: 165, 91 and 38. After Milestone 3: 122 and 78. After Milestone 2: 98 and 68. After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
+**Test counts:** 390 backend (pytest), 141 frontend (Vitest + React Testing Library), 54 end-to-end (Playwright), including Milestone 5B (verified locally, not yet committed). After Milestone 5A: 269, 113 and 45, (CI run 43749980036: all five jobs passed; 45 end-to-end tests passed in CI). After Milestone 5: 165, 91 and 38. After Milestone 3: 122 and 78. After Milestone 2: 98 and 68. After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
 
 The manual browser checks were one-off Playwright scripts, not part of the repository or CI. Milestone 5 makes them permanent.
 
@@ -499,6 +587,9 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 | ISSUE-17 | The end-to-end suite runs in Chromium only, against the Vite development server, and does not cover API-unavailable states or exact theme colours (covered by frontend unit tests and screenshots instead). | Browser-specific or production-build regressions would not be caught end to end. | Milestone 6: run the suite against the production frontend image; consider Firefox and WebKit projects. |
 | ISSUE-18 | Comments are append-only with no redaction: a sensitive comment published by mistake (including a staff reply posted as public instead of internal) cannot be removed or hidden through the application; only a database owner could, by disabling the trigger. | **Production-readiness blocker for use with real user data.** Mitigated for now by the internal default, the named submit button and the public-reply warning. | Milestone 6: administrative redaction that keeps an immutable record of who redacted what, when and why, hides the content from every reader, and is covered by visibility tests. |
 | ISSUE-19 | Comment posting is not rate limited, and comment IDs come from one sequence shared by public and internal comments, so a reporter could infer that other comments were created between two of theirs (not which incident, author or content). | Spam or flooding by an authenticated user; minor activity side channel. | Milestone 6: per-user rate limiting with the shared limiter (ISSUE-7); revisit IDs if the side channel matters for deployment. |
+| ISSUE-20 | The CSV export ignores the list's SLA filter (it applies only severity and status); the export button's accessible name states its scope. | Exports from an SLA-filtered list contain more rows than shown. | Future: pass `sla` to the export with the same conditions and tests. |
+| ISSUE-21 | Escalations are in-app only (badge, staff filter, dashboard count); nobody is notified by email or webhook. | Staff must look at the application to notice an escalation. | Milestone 6 (D12): notifications through a configured channel, without incident text in the message. |
+| ISSUE-22 | The stored SLA read model is maintained by the application; a direct SQL change to incidents or events would bypass it. | Stored SLA figures could drift from the audit trail. | `python -m app.cli sla-verify` detects any difference; Milestone 6: run it on a schedule with alerting, and the least-privilege role (ISSUE-12) prevents direct changes. |
 
 ---
 
@@ -513,7 +604,7 @@ Milestones are delivered in order, each as a small, separately approved change w
 | 1–4 | Authentication/RBAC, audit trail, analytics dashboard, secure CSV export | **Complete** (see *Completed functionality*) |
 | 5 | Permanent Playwright end-to-end tests in GitHub Actions | **Complete** (`13d3c34`, `7e65e81`, `dea4ba7`) |
 | 5A | Incident comments and internal-only responder notes | **Complete** (`ddc571e`) |
-| 5B | SLA tracking, response/resolution deadlines, overdue indicators and escalation | Planned |
+| 5B | SLA tracking, response/resolution deadlines, overdue indicators and escalation | Implemented, verified locally (pending commit and CI) |
 | 5C | AI-assisted incident triage with human approval | Planned |
 | 6 | Production hardening, observability, monitoring and deployment | Planned |
 | — | Final presentation: live demo, sample data, screenshots, architecture diagram, README, 60–90 s walkthrough | Planned |
@@ -593,11 +684,13 @@ Discussion on an incident: public comments that the reporter can see, and intern
 - [x] Comment creation (and any edit or delete allowed by the approved policy) is auditable with actor and time. *(Append-only rows; no edit or delete exists. Verified locally; CI run 43749980036 passed.)*
 - [x] Backend, frontend and end-to-end tests, including cross-reporter isolation and deliberate-break checks. *(18 of 18 variants caught. Verified locally; CI run 43749980036 passed.)*
 
-### Milestone 5B — SLA tracking, deadlines, overdue indicators and escalation · Planned
+### Milestone 5B — SLA tracking, deadlines, overdue indicators and escalation · Implemented (pending commit)
 
 Response and resolution targets per severity, visible deadlines, overdue status and escalation.
 
-**Anticipated technical additions (not implemented)**
+Implemented as described in *SLA design* (approved D1–D14, refinements 1–10 and the stored read model). The original anticipated additions, kept for reference:
+
+**Anticipated technical additions (as planned)**
 - SLA policy per severity (response target and resolution target), stored in a table or configuration and changeable only by admins; definitions of "responded" (for example first triage action by staff) and "resolved" reuse the audit trail, as the analytics do.
 - Deadlines derived from `created_at` and the policy; overdue and breached states computed in SQL so list filters, dashboard figures and exports agree.
 - Escalation when a deadline passes (for example raising an escalation level and notifying or highlighting for staff), recorded in the audit trail. This needs a system-actor design, because audit events currently require a human actor; the approach is decided in the plan.
@@ -605,11 +698,11 @@ Response and resolution targets per severity, visible deadlines, overdue status 
 - A testable clock (injectable "now") so deadline and escalation tests are deterministic.
 
 **Acceptance criteria**
-- [ ] SLA targets per severity are documented, configurable by admins only, and changes are auditable.
-- [ ] Deadlines, overdue and breached states are correct at boundaries (exactly at the deadline, after a status change, after reopening) and computed in UTC with display in the viewer's time zone.
-- [ ] Escalation happens once per breach, is idempotent and is recorded with its cause.
-- [ ] Visibility rules apply to every SLA figure, filter and export (cross-reporter tests).
-- [ ] Unit, API, end-to-end and deliberate-break tests; performance checked on the benchmark dataset.
+- [x] SLA targets per severity are documented, configurable by admins only, and changes are auditable. *(Verified locally; CI pending.)*
+- [x] Deadlines, overdue and breached states are correct at boundaries (exactly at the deadline, after a status change, after reopening) and computed in UTC with display in the viewer's time zone. *(Verified locally; CI pending.)*
+- [x] Escalation happens once per breach, is idempotent and is recorded with its cause. *(Verified locally, including concurrency; CI pending.)*
+- [x] Visibility rules apply to every SLA figure, filter and export (cross-reporter tests). *(Verified locally; CI pending.)*
+- [x] Unit, API, end-to-end and deliberate-break tests; performance checked on the benchmark dataset. *(Verified locally; CI pending.)*
 
 ### Milestone 5C — AI-assisted incident triage with human approval · Planned
 
@@ -647,7 +740,7 @@ The original hardening and deployment criteria below are unchanged; observabilit
 - [ ] Final documentation: README with architecture diagram, screenshots, setup, testing, security model and roles, API reference, and a short "design decisions" section. *(Delivered with the Final presentation.)*
 - [ ] Observability: structured logs with request IDs (no secrets or personal data), liveness and readiness endpoints, and application metrics (request rate, latency and errors per route; database pool; export and analytics counts).
 - [ ] Evaluate **Prometheus** (metrics endpoint and scraping), **Grafana** (provisioned dashboards) and **OpenTelemetry** (traces across FastAPI and SQLAlchemy); record the decision and adopt what fits the chosen hosting, with the reasons documented.
-- [ ] Monitoring and alerting for availability, error rate and (after Milestone 5B) SLA breaches, with a short runbook.
+- [ ] Monitoring and alerting for availability, error rate and (after Milestone 5B) SLA breaches, with a short runbook; escalation notifications (ISSUE-21) and a scheduled `sla-verify` check (ISSUE-22); run the `sla-worker` service in the deployment.
 - [ ] Re-run the analytics and export benchmarks at production-like volume (ISSUE-13) and decide on read replicas or caching (ISSUE-14).
 
 ### Final presentation · Planned

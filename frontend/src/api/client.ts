@@ -1,5 +1,8 @@
 import type {
   AnalyticsParams,
+  IncidentSla,
+  SlaPolicy,
+  SlaPolicyCreate,
   CommentCreate,
   CommentPage,
   IncidentComment,
@@ -184,6 +187,7 @@ export function listIncidents(params: IncidentListParams, signal?: AbortSignal):
   const query = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset) });
   if (params.severity) query.set('severity', params.severity);
   if (params.status) query.set('status', params.status);
+  if (params.sla) query.set('sla', params.sla);
   return request<IncidentPage>(`/incidents?${query.toString()}`, { signal });
 }
 
@@ -211,6 +215,22 @@ export function listComments(id: number, params: { limit: number; offset: number
 
 export function createComment(id: number, payload: CommentCreate): Promise<IncidentComment> {
   return request<IncidentComment>(`/incidents/${encodeURIComponent(String(id))}/comments`, { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export function getIncidentSla(id: number, signal?: AbortSignal): Promise<IncidentSla> {
+  return request<IncidentSla>(`/incidents/${encodeURIComponent(String(id))}/sla`, { signal });
+}
+
+export function getSlaPolicy(signal?: AbortSignal): Promise<SlaPolicy> {
+  return request<SlaPolicy>('/sla/policy', { signal });
+}
+
+export function listSlaPolicyVersions(signal?: AbortSignal): Promise<SlaPolicy[]> {
+  return request<SlaPolicy[]>('/sla/policy/versions', { signal });
+}
+
+export function createSlaPolicyVersion(payload: SlaPolicyCreate): Promise<SlaPolicy> {
+  return request<SlaPolicy>('/sla/policy/versions', { method: 'POST', body: JSON.stringify(payload) });
 }
 
 export function getAnalyticsSummary(params: AnalyticsParams, signal?: AbortSignal): Promise<AnalyticsSummary> {

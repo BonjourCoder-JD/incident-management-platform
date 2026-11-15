@@ -29,6 +29,7 @@ A two-page case study covering the architecture, security engineering, automated
 - Analytics dashboard computed in PostgreSQL: volume, status and severity breakdowns, current backlog, created-versus-resolved trend and time to first resolution from the audit trail, scoped to what each role may see
 - Tamper-resistant audit trail: every change recorded with who, when and before/after values, in the same transaction, shown as a readable history
 - Incident discussion: public comments between the reporter and responders, plus internal notes that only responders and admins can read, enforced by the API; comments are append-only and shown as plain text
+- SLA tracking: response and resolution targets per severity, deadlines and overdue states on every incident and in the list, dashboard compliance figures, automatic escalation by a background worker, and admin-only policy versions with history
 - User management for admins and self-service password changes
 - Loading, empty, error, forbidden and success states throughout, and a responsive layout down to phone width
 

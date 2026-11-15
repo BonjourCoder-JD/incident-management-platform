@@ -5,6 +5,7 @@ import { permissions, useCurrentUser } from '../auth';
 import { IncidentFields } from '../components/IncidentFields';
 import { IncidentDiscussion } from '../components/IncidentDiscussion';
 import { IncidentHistory } from '../components/IncidentHistory';
+import { IncidentSla } from '../components/IncidentSla';
 import { useAssignees } from '../components/useAssignees';
 import { Alert, Email, EmptyState, LoadingState, SeverityBadge, StatusBadge } from '../components/ui';
 import { useFlash } from '../flash';
@@ -238,6 +239,8 @@ export function IncidentDetailPage({ id }: { id: number }) {
               </>
             )}
           </section>
+
+          <IncidentSla incidentId={incident.id} refreshKey={historyKey} />
 
           <section className="card" aria-labelledby="meta-heading">
             <h2 id="meta-heading">Details</h2>

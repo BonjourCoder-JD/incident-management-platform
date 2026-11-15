@@ -24,6 +24,8 @@ from .auth import CurrentUser
 from .config import settings
 from .database import engine, get_db
 from .incidents import _visible_to, incident_filters
+from . import sla_store
+from .sla import Now
 from .models import ExportOutcome, Incident, IncidentExport, IncidentStatus, Severity, User
 
 router = APIRouter(prefix="/exports", tags=["exports"])
@@ -31,6 +33,8 @@ router = APIRouter(prefix="/exports", tags=["exports"])
 COLUMNS = (
     "id", "title", "description", "severity", "status",
     "reporter_email", "assignee_email", "created_at_utc", "updated_at_utc",
+    # First-cycle response and current-cycle resolution (see app/sla.py); "not_tracked" when untracked.
+    "response_due_utc", "response_state", "resolution_due_utc", "resolution_state",
 )
 BATCH_SIZE = 500
 BOM = "\ufeff"  # lets Excel detect UTF-8
@@ -54,7 +58,9 @@ def neutralize_cell(value: str | None) -> str:
     return value
 
 
-def _utc(value: datetime) -> str:
+def _utc(value: datetime | None) -> str:
+    if value is None:
+        return ""
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -70,6 +76,10 @@ def csv_row(row) -> list[str]:
         neutralize_cell(row.assignee_email),
         _utc(row.created_at),
         _utc(row.updated_at),
+        _utc(row.response_due),
+        row.response_state or "not_tracked",
+        _utc(row.resolution_due),
+        row.resolution_state or "not_tracked",
     ]
 
 
@@ -92,16 +102,19 @@ def get_export_opener() -> Callable[[], Connection]:
     return open_export_connection
 
 
-def export_query(user: User, severity: Severity | None, status: IncidentStatus | None):
+def export_query(user: User, severity: Severity | None, status: IncidentStatus | None, now: datetime):
     reporter = aliased(User, name="reporter")
     assignee = aliased(User, name="assignee")
+    sla = sla_store.current_state(_visible_to(select(Incident.id.label("id")).where(*incident_filters(severity, status)), user), now)
     query = (
         select(
             Incident.id, Incident.title, Incident.description, Incident.severity, Incident.status,
             reporter.email.label("reporter_email"), assignee.email.label("assignee_email"),
             Incident.created_at, Incident.updated_at,
+            sla.c.response_due, sla.c.response_state, sla.c.resolution_due, sla.c.resolution_state,
         )
         .outerjoin(reporter, reporter.id == Incident.reporter_id)
+        .outerjoin(sla, sla.c.incident_id == Incident.id)
         .outerjoin(assignee, assignee.id == Incident.assignee_id)
         .where(*incident_filters(severity, status))
         .order_by(Incident.id.desc())
@@ -158,6 +171,7 @@ def export_incidents_csv(
     user: CurrentUser,
     db: Annotated[Session, Depends(get_db)],
     open_connection: Annotated[Callable[[], Connection], Depends(get_export_opener)],
+    now: Now,
     severity: Severity | None = None,
     status: IncidentStatus | None = None,
 ):
@@ -180,7 +194,7 @@ def export_incidents_csv(
 
     filename = _filename(severity, status)
     return StreamingResponse(
-        stream_csv(conn, export_query(user, severity, status)),
+        stream_csv(conn, export_query(user, severity, status, now)),
         media_type="text/csv; charset=utf-8",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',

@@ -71,6 +71,8 @@ def test_quoting_unicode_and_timestamps_round_trip(login_as, reporter, responder
         "id": str(incident.id), "title": title, "description": description, "severity": "high", "status": "investigating",
         "reporter_email": reporter.email, "assignee_email": responder.email,
         "created_at_utc": "2026-03-02T09:30:00Z", "updated_at_utc": "2026-03-02T10:30:00Z",
+        # No `created` audit event, so not tracked (SLA columns are covered in test_sla.py).
+        "response_due_utc": "", "response_state": "not_tracked", "resolution_due_utc": "", "resolution_state": "not_tracked",
     }
 
 
@@ -293,5 +295,5 @@ def test_real_export_connection_is_a_read_only_repeatable_read_snapshot():
 def test_export_query_applies_the_visibility_rule():
     from app.models import User
     reporter = User(id=424242, role=UserRole.REPORTER)
-    for query in (exports.export_query(reporter, None, None), exports.count_query(reporter, Severity.HIGH, None)):
+    for query in (exports.export_query(reporter, None, None, T0), exports.count_query(reporter, Severity.HIGH, None)):
         assert "reporter_id = 424242" in str(query.compile(compile_kwargs={"literal_binds": True}))

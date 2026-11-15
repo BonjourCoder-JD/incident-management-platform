@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
@@ -6,7 +6,9 @@ from . import audit
 from .auth import CurrentUser
 from .database import get_db
 from .models import Incident, IncidentEvent, IncidentEventAction, IncidentStatus, Severity, User, UserRole
-from .schemas import IncidentCreate, IncidentEventPage, IncidentEventRead, IncidentPage, IncidentRead, IncidentUpdate, UserSummary
+from .schemas import IncidentCreate, IncidentEventPage, IncidentEventRead, IncidentListItem, IncidentPage, IncidentRead, IncidentUpdate, SlaSummary, UserSummary
+from . import sla_store
+from .sla import Now, lock_policy_shared
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -74,28 +76,69 @@ def create_incident(payload: IncidentCreate, user: CurrentUser, db: DbSession):
     incident = Incident(**payload.model_dump(), reporter_id=user.id)
     db.add(incident)
     db.flush()  # assigns the id; nothing is committed until the audit event is added too
-    audit.record_incident_event(db, incident, user, IncidentEventAction.CREATED, audit.creation_changes(incident))
+    changes = audit.creation_changes(incident)
+    audit.record_incident_event(db, incident, user, IncidentEventAction.CREATED, changes)
+    _record_sla(db, incident, IncidentEventAction.CREATED, changes)  # starts SLA cycle 0
     db.commit()  # incident and its audit event commit (or roll back) together
     db.refresh(incident)
     return incident
+
+SlaFilter = Literal["overdue", "approaching", "breached", "escalated"]
+
+
+def _sla_items(db: Session, incidents: list[Incident], user: User, now) -> list[IncidentListItem]:
+    """Adds each incident's SLA summary (and, for staff, the escalated flag) to a page of results."""
+    if not incidents:
+        return []
+    state = sla_store.current_state(select(Incident.id.label("id")).where(Incident.id.in_([i.id for i in incidents])), now)
+    rows = {row.incident_id: row for row in db.execute(select(state))}
+    staff = user.role != UserRole.REPORTER
+    items = []
+    for incident in incidents:
+        row = rows.get(incident.id)
+        summary = SlaSummary(state=row.summary_state, target=row.summary_target, due_at=row.summary_due) if row is not None and row.summary_state else None
+        item = IncidentListItem.model_validate(incident)
+        item.sla = summary
+        item.escalated = bool(row is not None and row.escalated) if staff else None
+        items.append(item)
+    return items
+
 
 @router.get("", response_model=IncidentPage)
 def list_incidents(
     user: CurrentUser,
     db: DbSession,
+    now: Now,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
     severity: Severity | None = None,
     status: IncidentStatus | None = None,
+    sla: SlaFilter | None = None,
 ):
     filters = incident_filters(severity, status)
+    if sla == "escalated" and user.role == UserRole.REPORTER:
+        raise HTTPException(status_code=403, detail="Only responders and admins can filter by escalation.")
+    if sla is not None:
+        # Indexed conditions on the stored SLA cycles (app/sla_store.py).
+        filters.append(sla_store.filter_condition(sla, now))
     total = db.scalar(_visible_to(select(func.count()).select_from(Incident).where(*filters), user))
-    items = db.scalars(_visible_to(select(Incident).where(*filters), user).order_by(Incident.id.desc()).limit(limit).offset(offset)).all()
-    return IncidentPage(items=items, total=total or 0, limit=limit, offset=offset)
+    page = db.scalars(_visible_to(select(Incident).where(*filters), user).order_by(Incident.id.desc()).limit(limit).offset(offset)).all()
+    return IncidentPage(items=_sla_items(db, page, user, now), total=total or 0, limit=limit, offset=offset)
+
 
 @router.get("/{incident_id}", response_model=IncidentRead)
 def get_incident(incident_id: int, user: CurrentUser, db: DbSession):
     return _get_visible(db, incident_id, user)
+
+def _record_sla(db: Session, incident: Incident, action: IncidentEventAction, changes: dict) -> None:
+    """Updates the stored SLA read model in this transaction, under the incident row lock.
+
+    The shared policy lock is taken first, so a policy version created concurrently is either
+    already visible (and older than this change) or will be stamped later than it (app/sla.py).
+    `now()` is the transaction start: exactly the audit event's created_at."""
+    lock_policy_shared(db)
+    sla_store.record_change(db, incident, action, changes, db.scalar(select(func.now())))
+
 
 def _apply_changes(incident: Incident, changes: dict) -> None:
     for field, value in changes.items():
@@ -120,7 +163,9 @@ def update_incident(incident_id: int, payload: IncidentUpdate, user: CurrentUser
         # Nothing actually changed: no row update and no audit event.
         db.rollback()
         return _get_visible(db, incident_id, user)
-    audit.record_incident_event(db, incident, user, audit.classify(diff), diff)
+    action = audit.classify(diff)
+    audit.record_incident_event(db, incident, user, action, diff)
+    _record_sla(db, incident, action, diff)
     db.commit()  # incident change and its audit event commit (or roll back) together
     db.refresh(incident)
     return incident

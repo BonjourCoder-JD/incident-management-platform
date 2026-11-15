@@ -11,3 +11,6 @@ services:
     # A different host port, so a running development stack on 5173 is unaffected.
     ports: !override
       - "127.0.0.1:15173:5173"
+  sla-worker:
+    # Not started: e2e/run.sh runs the escalation command itself, so the tests control when.
+    profiles: ["manual"]

@@ -1,8 +1,8 @@
 import re
 from datetime import date, datetime
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import Any, Literal
-from .models import CommentVisibility, IncidentEventAction, IncidentStatus, Severity, UserRole
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing import Annotated, Any, Literal
+from .models import CommentVisibility, IncidentEventAction, IncidentStatus, Severity, SlaPolicySource, SlaTarget, UserRole
 from .security import EMAIL_MAX_LENGTH, PASSWORD_MAX_LENGTH, is_valid_email, normalize_email, password_problem
 
 # PostgreSQL INTEGER upper bound. Larger IDs must fail validation (422), not reach the database (BUG-1).
@@ -111,8 +111,23 @@ class IncidentRead(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+SlaStateName = Literal["on_track", "approaching", "overdue", "met", "breached", "not_tracked"]
+
+
+class SlaSummary(BaseModel):
+    """The most urgent current SLA target of an incident (see app/sla.py)."""
+    state: Literal["on_track", "approaching", "overdue", "met", "breached"]
+    target: SlaTarget
+    due_at: datetime
+
+class IncidentListItem(IncidentRead):
+    # null when the incident is not tracked (legacy, or its cycle started before any policy).
+    sla: SlaSummary | None = None
+    # Staff only: an escalation exists for the current cycle. Always null for reporters.
+    escalated: bool | None = None
+
 class IncidentPage(BaseModel):
-    items: list[IncidentRead]
+    items: list[IncidentListItem]
     total: int
     limit: int
     offset: int
@@ -196,6 +211,105 @@ class CommentPage(BaseModel):
     offset: int
 
 
+# ---- SLA -----------------------------------------------------------------------------
+
+class SlaTargetStatus(BaseModel):
+    target_minutes: int | None
+    # The strictest severity held in the cycle until the target was satisfied (or until now).
+    severity: Severity | None
+    due_at: datetime | None
+    warning_at: datetime | None
+    satisfied_at: datetime | None
+    state: SlaStateName
+
+class SlaCycle(BaseModel):
+    cycle: int
+    started_at: datetime
+    policy_version_id: int | None
+    tracked: bool
+    # Only cycle 0 has a response target.
+    response: SlaTargetStatus | None
+    resolution: SlaTargetStatus
+
+class SlaEscalationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    cycle: int
+    target: SlaTarget
+    deadline_at: datetime
+    created_at: datetime
+    triggered_by: Literal["system"]
+
+class IncidentSla(BaseModel):
+    # Server time used for every state, so clients never need their own clock.
+    now: datetime
+    tracked: bool
+    current_cycle: int
+    cycles: list[SlaCycle]
+    # Responders and admins only; always null for reporters.
+    escalations: list[SlaEscalationRead] | None
+
+SLA_RESPONSE_MAX_MINUTES = 30 * 24 * 60
+SLA_RESOLUTION_MAX_MINUTES = 365 * 24 * 60
+SLA_REASON_MAX_LENGTH = 500
+class SlaTargetValues(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    severity: Severity
+    response_minutes: Annotated[int, Field(strict=True, ge=1, le=SLA_RESPONSE_MAX_MINUTES)]
+    resolution_minutes: Annotated[int, Field(strict=True, ge=1, le=SLA_RESOLUTION_MAX_MINUTES)]
+
+    @model_validator(mode="after")
+    def response_within_resolution(self):
+        if self.response_minutes > self.resolution_minutes:
+            raise ValueError("The response target cannot be longer than the resolution target.")
+        return self
+
+SEVERITY_ORDER = (Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW)
+
+class SlaPolicyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str
+    targets: list[SlaTargetValues] = Field(min_length=4, max_length=4)
+
+    @field_validator("reason")
+    @classmethod
+    def check_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Enter a reason for the change.")
+        if _COMMENT_FORBIDDEN.search(value):
+            raise ValueError("The reason cannot contain control characters.")
+        if len(value) > SLA_REASON_MAX_LENGTH:
+            raise ValueError(f"The reason can be at most {SLA_REASON_MAX_LENGTH} characters.")
+        return value
+
+    @model_validator(mode="after")
+    def one_target_per_severity_in_order(self):
+        by_severity = {target.severity: target for target in self.targets}
+        if set(by_severity) != set(Severity):
+            raise ValueError("Give exactly one target for each severity.")
+        ordered = [by_severity[severity] for severity in SEVERITY_ORDER]
+        for stricter, lighter in zip(ordered, ordered[1:]):
+            if stricter.response_minutes > lighter.response_minutes or stricter.resolution_minutes > lighter.resolution_minutes:
+                raise ValueError("A more severe incident cannot have a longer target than a less severe one.")
+        return self
+
+class SlaTargetRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    severity: Severity
+    response_minutes: int
+    resolution_minutes: int
+
+class SlaPolicyRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    source: SlaPolicySource
+    reason: str
+    author: UserSummary | None
+    created_at: datetime
+    targets: list[SlaTargetRead]
+
+
 # ---- Analytics -----------------------------------------------------------------------
 
 class AnalyticsRange(BaseModel):
@@ -238,6 +352,22 @@ class ResolutionMetrics(BaseModel):
     excluded_legacy: int
     by_severity: list[SeverityResolution]
 
+class SlaComplianceCounts(BaseModel):
+    met: int
+    breached: int
+    outstanding: int
+    not_tracked: int
+
+class SlaAnalytics(BaseModel):
+    # First cycle of the incidents created in the range (reopened cycles are on the detail page).
+    response: SlaComplianceCounts
+    resolution: SlaComplianceCounts
+    # Current backlog, whatever the range: open incidents with an overdue or approaching target.
+    overdue_by_severity: list[SeverityCount]
+    approaching_by_severity: list[SeverityCount]
+    # Escalations recorded in the range. Responders and admins only; null for reporters.
+    escalations: int | None
+
 class AnalyticsSummary(BaseModel):
     scope: Literal["own", "all"]
     range: AnalyticsRange
@@ -247,3 +377,4 @@ class AnalyticsSummary(BaseModel):
     open_backlog_by_severity: list[SeverityCount]
     trend: list[TrendPoint]
     resolution: ResolutionMetrics
+    sla: SlaAnalytics

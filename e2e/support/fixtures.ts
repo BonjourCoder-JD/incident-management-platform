@@ -46,6 +46,18 @@ export const legacyIncidentIds = {
 
 export const bootstrapAdmin = () => ({ email: required('E2E_ADMIN_EMAIL'), password: required('E2E_ADMIN_PASSWORD') });
 
+/** SLA scenarios seeded by e2e/run.sh with back-dated audit events (see e2e/seed_sla.py). */
+export const slaScenario = {
+  get reporter() { return { email: required('E2E_SLA_REPORTER_EMAIL'), password: required('E2E_SLA_REPORTER_PASSWORD') }; },
+  get overdueId() { return Number(required('E2E_SLA_OVERDUE_ID')); },
+  get approachingId() { return Number(required('E2E_SLA_APPROACHING_ID')); },
+  get metId() { return Number(required('E2E_SLA_MET_ID')); },
+  get breachedId() { return Number(required('E2E_SLA_BREACHED_ID')); },
+  get reopenedId() { return Number(required('E2E_SLA_REOPENED_ID')); },
+  /** Escalations recorded by the first and second real `sla-escalate` runs. */
+  get escalationRuns() { return [Number(required('E2E_SLA_FIRST_RUN_RECORDED')), Number(required('E2E_SLA_SECOND_RUN_RECORDED'))]; },
+};
+
 /**
  * API client signed in as the bootstrap admin. The session cookie and CSRF token are sent explicitly,
  * so this works over plain-HTTP localhost regardless of the cookie's Secure flag.

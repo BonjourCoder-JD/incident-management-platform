@@ -2,7 +2,11 @@ import type { Page } from '@playwright/test';
 import { readCsvDownload } from '../support/csv';
 import { createIncident, expect, signIn, test } from '../support/fixtures';
 
-const COLUMNS = ['id', 'title', 'description', 'severity', 'status', 'reporter_email', 'assignee_email', 'created_at_utc', 'updated_at_utc'];
+const COLUMNS = [
+  'id', 'title', 'description', 'severity', 'status', 'reporter_email', 'assignee_email', 'created_at_utc', 'updated_at_utc',
+  // SLA columns (Milestone 5B): first-cycle response and current-cycle resolution.
+  'response_due_utc', 'response_state', 'resolution_due_utc', 'resolution_state',
+];
 
 async function exportCsv(page: Page, query = '') {
   await page.goto(`/${query}`);

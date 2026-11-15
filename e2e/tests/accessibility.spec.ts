@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
-import { bootstrapAdmin, createIncident, expect, hasNoHorizontalScroll, pageApi, signIn, signOut, test } from '../support/fixtures';
+import { bootstrapAdmin, createIncident, expect, hasNoHorizontalScroll, pageApi, signIn, signOut, slaScenario, test } from '../support/fixtures';
 
 const BLOCKING = new Set(['serious', 'critical']);
 
@@ -69,6 +69,24 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await signOut(page);
     });
 
+    test('SLA card, SLA list filter and SLA policy page', async ({ page }) => {
+      await signIn(page, bootstrapAdmin());
+      await page.goto(`/incidents/${slaScenario.overdueId}`);
+      await expect(page.getByRole('region', { name: 'SLA' }).getByRole('heading', { name: 'Escalations' })).toBeVisible();
+      await expectNoBlockingViolations(page, 'SLA card with an escalation');
+      await page.goto('/?sla=overdue');
+      await expect(page.getByRole('link', { name: 'E2E SLA response overdue' })).toBeVisible();
+      await expectNoBlockingViolations(page, 'SLA-filtered list');
+      await page.goto('/sla');
+      await page.getByRole('button', { name: 'Review change' }).click(); // empty reason: field error
+      await expect(page.getByText('Enter a reason for the change.')).toBeVisible();
+      await expectNoBlockingViolations(page, 'SLA policy page with an error');
+      await page.getByLabel('Reason for the change').fill('Accessibility check only');
+      await page.getByRole('button', { name: 'Review change' }).click();
+      await expect(page.getByRole('group', { name: 'Confirm the new version' })).toBeVisible();
+      await expectNoBlockingViolations(page, 'SLA policy review');
+    });
+
     test('dashboard, users and account pages', async ({ page }) => {
       await signIn(page, bootstrapAdmin());
       await page.goto('/dashboard');
@@ -97,6 +115,8 @@ test.describe('Phone width (390 px)', () => {
       [`/incidents/${id}`, () => expect(page.getByRole('region', { name: 'Discussion' }).getByText('Not visible to the reporter')).toBeVisible()],
       ['/incidents/new', () => expect(page.getByLabel('Title')).toBeVisible()],
       ['/dashboard', () => expect(page.locator('.stat-tile').first()).toBeVisible()],
+      ['/?sla=overdue', () => expect(page.getByRole('link', { name: 'E2E SLA response overdue' })).toBeVisible()],
+      [`/incidents/${slaScenario.reopenedId}`, () => expect(page.getByRole('region', { name: 'SLA' }).getByText('Earlier periods (1)')).toBeVisible()],
       ['/account', () => expect(page.getByRole('heading', { name: 'Your account' })).toBeVisible()],
     ];
     for (const [path, ready] of pages) {
@@ -104,5 +124,16 @@ test.describe('Phone width (390 px)', () => {
       await ready();
       expect(await hasNoHorizontalScroll(page), `${path} scrolls horizontally`).toBe(true);
     }
+  });
+});
+
+test.describe('Phone width (390 px), admin pages', () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+  test('the SLA policy page fits without horizontal scrolling', async ({ page }) => {
+    await signIn(page, bootstrapAdmin());
+    await page.goto('/sla');
+    await expect(page.getByRole('table', { name: 'Current SLA targets' })).toBeVisible();
+    expect(await hasNoHorizontalScroll(page), '/sla scrolls horizontally').toBe(true);
   });
 });

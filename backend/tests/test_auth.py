@@ -172,6 +172,7 @@ def test_csrf_route_inventory_is_complete():
         ("POST", "/auth/logout"), ("PUT", "/auth/password"),
         ("POST", "/incidents"), ("PATCH", "/incidents/{incident_id}"),
         ("POST", "/incidents/{incident_id}/comments"),
+        ("POST", "/sla/policy/versions"),
         ("POST", "/users"), ("PATCH", "/users/{user_id}"),
     }
 

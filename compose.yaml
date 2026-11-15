@@ -21,6 +21,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+  # Records escalations for overdue SLA targets once a minute (Milestone 5B). Same image as the
+  # backend; it holds a database advisory lock, so a second copy would simply skip its runs.
+  sla-worker:
+    build: ./backend
+    command: ["python", "-m", "app.cli", "sla-escalate", "--loop", "--interval", "60"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-incident}:${POSTGRES_PASSWORD:-localdevonly}@db:5432/${POSTGRES_DB:-incidents}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
   frontend:
     build: ./frontend
     ports:

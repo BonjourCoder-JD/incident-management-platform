@@ -37,6 +37,17 @@ docker compose up --build -d backend frontend
 
 The tests use the Compose PostgreSQL database. Each test runs in a transaction that is rolled back, so no test records or test accounts are kept. CI runs the same suite against a disposable database.
 
+### SLA worker and consistency check
+
+`docker compose up` also starts `sla-worker`, which records an escalation for each newly overdue SLA target once a minute (same image as the backend; a database advisory lock makes a second copy skip its runs). The same commands can be run by hand:
+
+```sh
+docker compose run --rm backend python -m app.cli sla-escalate   # one bounded run
+docker compose run --rm backend python -m app.cli sla-verify     # stored SLA cycles vs the audit trail; exit 1 on any difference
+```
+
+A few concurrency tests commit synthetic rows and remove them afterwards with `session_replication_role = replica`, which needs a superuser (true for the Compose and CI databases).
+
 ## End-to-end tests
 
 The Playwright suite in `e2e/` runs against a **disposable** stack: Compose project `imp-e2e` with its own database volume, the frontend on `127.0.0.1:15173`, the API unpublished, and random passwords generated for every run. It never touches the development database, and the stack is removed afterwards (the script first checks that every volume it removes belongs to `imp-e2e`).
@@ -121,7 +132,7 @@ All incident and user endpoints require a signed-in session (401 otherwise), and
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/incidents` | Create an incident (`title`, `description`, `severity`; `assignee_id` for responders and admins). The reporter is the signed-in user. |
-| `GET` | `/incidents` | List visible incidents, newest first. Query: `limit` (1–100, default 20), `offset` (≥0), `severity`, `status` |
+| `GET` | `/incidents` | List visible incidents, newest first. Query: `limit` (1–100, default 20), `offset` (≥0), `severity`, `status`, `sla` (`overdue`, `approaching`, `breached`; `escalated` for staff). Each item has an `sla` summary. |
 | `GET` | `/incidents/{incident_id}` | Get one incident (404 if it does not exist or is not visible to you) |
 | `PATCH` | `/incidents/{incident_id}` | Update `title`, `description`, `severity`; responders and admins also `status` and `assignee_id` |
 | `GET` | `/exports/incidents.csv` | CSV of the incidents you may see, with optional `severity`/`status`; 413 above `EXPORT_MAX_ROWS` (default 10,000). Read-only; each request is recorded. |
@@ -129,6 +140,8 @@ All incident and user endpoints require a signed-in session (401 otherwise), and
 | `GET` | `/incidents/{incident_id}/events` | Audit history, newest first: `limit` (1–100, default 20), `offset`. Same visibility as the incident. Read-only. |
 | `GET` | `/incidents/{incident_id}/comments` | Discussion, oldest first: `limit` (1–100, default 50), `offset`. Reporters (own incidents only) get public comments only, and `total` counts only those. |
 | `POST` | `/incidents/{incident_id}/comments` | Add `{body, visibility}`: `visibility` is required, `public` or `internal`; reporters may post `public` only (403). `body` is 1–5,000 characters after trimming, without control characters. Comments cannot be edited or deleted. |
+| `GET` | `/incidents/{incident_id}/sla` | SLA targets, deadlines and states for every cycle, with the server time (`now`); escalations for responders and admins only. Same visibility as the incident. |
+| `GET` | `/sla/policy` | Current SLA targets per severity (any signed-in user). `GET /sla/policy/versions` and `POST /sla/policy/versions` (`{reason, targets}`) are admin-only. |
 
 Severity: `low`, `medium`, `high`, `critical`. Status: `open`, `investigating`, `resolved`, `closed`. `assignee_id` must be an active responder or admin (1–2147483647).
 

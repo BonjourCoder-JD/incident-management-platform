@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError, getAnalyticsSummary } from '../api/client';
 import type { AnalyticsParams, AnalyticsSummary } from '../api/types';
 import { MeterList } from '../components/dashboard/MeterList';
+import { SlaSummary } from '../components/dashboard/SlaSummary';
 import { StatTile } from '../components/dashboard/StatTile';
 import { TrendChart } from '../components/dashboard/TrendChart';
 import { formatCount, formatDay, formatHours } from '../components/dashboard/format';
@@ -244,6 +245,8 @@ function DashboardContent({ data, refreshing, onWiden }: { data: AnalyticsSummar
           )}
         </section>
       </div>
+
+      <SlaSummary sla={data.sla} staff={data.scope === 'all'} />
     </div>
   );
 }

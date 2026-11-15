@@ -10,6 +10,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { IncidentDetailPage } from './pages/IncidentDetailPage';
 import { IncidentListPage } from './pages/IncidentListPage';
 import { LoginPage } from './pages/LoginPage';
+import { SlaPolicyPage } from './pages/SlaPolicyPage';
 import { UsersPage } from './pages/UsersPage';
 import { Link, useLocation, type Route } from './router';
 
@@ -69,7 +70,9 @@ function Layout({ user, children }: { user?: User; children: ReactNode }) {
     ? [
         { to: '/', label: permissions.canTriage(user) ? 'Incidents' : 'My incidents', active: pathname === '/' || pathname.startsWith('/incidents') },
         { to: '/dashboard', label: permissions.canTriage(user) ? 'Dashboard' : 'My dashboard', active: pathname === '/dashboard' },
-        ...(permissions.canManageUsers(user) ? [{ to: '/users', label: 'Users', active: pathname === '/users' }] : []),
+        ...(permissions.canManageUsers(user)
+          ? [{ to: '/users', label: 'Users', active: pathname === '/users' }, { to: '/sla', label: 'SLA policy', active: pathname === '/sla' }]
+          : []),
       ]
     : [];
   return (
@@ -119,6 +122,8 @@ function RouteView({ route, user }: { route: Route; user: User }) {
       return <IncidentDetailPage key={route.id} id={route.id} />;
     case 'users':
       return permissions.canManageUsers(user) ? <UsersPage /> : <Forbidden />;
+    case 'sla':
+      return permissions.canManageUsers(user) ? <SlaPolicyPage /> : <Forbidden />;
     case 'account':
       return <AccountPage />;
     case 'dashboard':

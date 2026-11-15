@@ -1,27 +1,54 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, listIncidents } from '../api/client';
-import { SEVERITIES, STATUSES, isSeverity, isStatus, type IncidentPage, type IncidentStatus, type Severity } from '../api/types';
+import { SEVERITIES, SLA_FILTERS, STATUSES, isSeverity, isSlaFilter, isStatus, type IncidentListItem, type IncidentPage, type IncidentStatus, type Severity, type SlaFilter } from '../api/types';
 import { permissions, useCurrentUser } from '../auth';
 import { ExportCsvButton } from '../components/ExportCsvButton';
-import { Alert, Email, EmptyState, LoadingState, SeverityBadge, StatusBadge } from '../components/ui';
-import { formatDateTime, SEVERITY_LABELS, STATUS_LABELS } from '../format';
+import { Alert, Email, EmptyState, EscalatedBadge, LoadingState, SeverityBadge, SlaBadge, StatusBadge } from '../components/ui';
+import { formatDateTime, SEVERITY_LABELS, SLA_STATE_LABELS, SLA_TARGET_LABELS, STATUS_LABELS } from '../format';
 import { Link, navigate } from '../router';
 
 export const PAGE_SIZE = 10;
 
+const OUTSTANDING = new Set(['on_track', 'approaching', 'overdue']);
+
+function SlaCell({ incident }: { incident: IncidentListItem }) {
+  if (!incident.sla) return <span className="muted">—<span className="visually-hidden"> Not tracked</span></span>;
+  const { state, target, due_at: due } = incident.sla;
+  return (
+    <span className="sla-cell">
+      <SlaBadge state={state} />
+      {incident.escalated && <EscalatedBadge />}
+      {OUTSTANDING.has(state) && (
+        <span className="muted small">{SLA_TARGET_LABELS[target]} due <time dateTime={due}>{formatDateTime(due)}</time></span>
+      )}
+    </span>
+  );
+}
+
 interface Filters {
   severity?: Severity;
   status?: IncidentStatus;
+  sla?: SlaFilter;
   page: number;
 }
 
-function readFilters(search: URLSearchParams): Filters {
+const SLA_FILTER_LABELS: Record<SlaFilter, string> = {
+  overdue: SLA_STATE_LABELS.overdue,
+  approaching: SLA_STATE_LABELS.approaching,
+  breached: SLA_STATE_LABELS.breached,
+  escalated: 'Escalated',
+};
+
+function readFilters(search: URLSearchParams, staff: boolean): Filters {
   const severity = search.get('severity');
   const status = search.get('status');
+  const sla = search.get('sla');
   const page = Number(search.get('page'));
   return {
     severity: isSeverity(severity) ? severity : undefined,
     status: isStatus(status) ? status : undefined,
+    // Escalation details are for responders and admins only.
+    sla: isSlaFilter(sla) && (staff || sla !== 'escalated') ? sla : undefined,
     page: Number.isInteger(page) && page >= 1 ? page : 1,
   };
 }
@@ -30,6 +57,7 @@ function toSearch(filters: Filters): string {
   const query = new URLSearchParams();
   if (filters.severity) query.set('severity', filters.severity);
   if (filters.status) query.set('status', filters.status);
+  if (filters.sla) query.set('sla', filters.sla);
   if (filters.page > 1) query.set('page', String(filters.page));
   const text = query.toString();
   return text ? `/?${text}` : '/';
@@ -43,29 +71,29 @@ type LoadState =
 export function IncidentListPage({ search }: { search: URLSearchParams }) {
   const user = useCurrentUser();
   const seesAll = permissions.canTriage(user);
-  const filters = readFilters(search);
-  const { severity, status, page } = filters;
+  const filters = readFilters(search, seesAll);
+  const { severity, status, sla, page } = filters;
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
     setState({ kind: 'loading' });
-    listIncidents({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE, severity, status }, controller.signal)
+    listIncidents({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE, severity, status, sla }, controller.signal)
       .then(result => setState({ kind: 'ready', page: result }))
       .catch(error => {
         if (controller.signal.aborted) return;
         setState({ kind: 'error', message: error instanceof ApiError ? error.message : 'Unable to load incidents.' });
       });
     return () => controller.abort();
-  }, [severity, status, page, reloadKey]);
+  }, [severity, status, sla, page, reloadKey]);
 
   const update = useCallback((next: Partial<Filters>) => {
     // Changing a filter returns to the first page; the URL is the source of truth.
     navigate(toSearch({ ...filters, page: 1, ...next }), { replace: !('page' in next) });
   }, [filters]);
 
-  const hasFilters = Boolean(severity || status);
+  const hasFilters = Boolean(severity || status || sla);
 
   return (
     <section aria-labelledby="incidents-heading">
@@ -93,8 +121,15 @@ export function IncidentListPage({ search }: { search: URLSearchParams }) {
               {STATUSES.map(value => <option key={value} value={value}>{STATUS_LABELS[value]}</option>)}
             </select>
           </div>
+          <div className="field field-inline">
+            <label htmlFor="filter-sla">SLA</label>
+            <select id="filter-sla" value={sla ?? ''} onChange={event => update({ sla: isSlaFilter(event.target.value) ? event.target.value : undefined })}>
+              <option value="">Any SLA state</option>
+              {SLA_FILTERS.filter(value => seesAll || value !== 'escalated').map(value => <option key={value} value={value}>{SLA_FILTER_LABELS[value]}</option>)}
+            </select>
+          </div>
           {hasFilters && (
-            <button type="button" className="button button-ghost" onClick={() => update({ severity: undefined, status: undefined })}>
+            <button type="button" className="button button-ghost" onClick={() => update({ severity: undefined, status: undefined, sla: undefined })}>
               Clear filters
             </button>
           )}
@@ -138,8 +173,8 @@ function Results({ page, pageNumber, hasFilters, update }: {
       );
     }
     return hasFilters ? (
-      <EmptyState title="No incidents match these filters" action={<button type="button" className="button button-secondary" onClick={() => update({ severity: undefined, status: undefined })}>Clear filters</button>}>
-        Try a different severity or status.
+      <EmptyState title="No incidents match these filters" action={<button type="button" className="button button-secondary" onClick={() => update({ severity: undefined, status: undefined, sla: undefined })}>Clear filters</button>}>
+        Try a different severity, status or SLA state.
       </EmptyState>
     ) : (
       <EmptyState title="No incidents reported yet" action={<Link to="/incidents/new" className="button button-primary">Report the first incident</Link>}>
@@ -162,6 +197,7 @@ function Results({ page, pageNumber, hasFilters, update }: {
               <th scope="col">Title</th>
               <th scope="col">Severity</th>
               <th scope="col">Status</th>
+              <th scope="col">SLA</th>
               <th scope="col">Assignee</th>
               <th scope="col">Last updated</th>
             </tr>
@@ -175,6 +211,7 @@ function Results({ page, pageNumber, hasFilters, update }: {
                 </td>
                 <td data-label="Severity"><SeverityBadge severity={incident.severity} /></td>
                 <td data-label="Status"><StatusBadge status={incident.status} /></td>
+                <td data-label="SLA"><SlaCell incident={incident} /></td>
                 <td data-label="Assignee" className="cell-email">{incident.assignee ? <Email value={incident.assignee.email} /> : <span className="muted">Unassigned</span>}</td>
                 <td data-label="Last updated"><time dateTime={incident.updated_at}>{formatDateTime(incident.updated_at)}</time></td>
               </tr>

@@ -336,6 +336,13 @@ input[aria-invalid='true'], select[aria-invalid='true'], textarea[aria-invalid='
 .user-menu-account { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--text); text-decoration: none; min-width: 0; }
 .user-menu-account:hover .user-menu-email { text-decoration: underline; }
 .user-menu-email { font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16rem; }
+/* SLA states: tones already contrast-checked as status and severity badges; the text label always
+   carries the meaning (Milestone 5B). */
+.sla-on_track, .sla-met { --tone: var(--st-resolved); }
+.sla-approaching { --tone: var(--internal); }
+.sla-overdue, .sla-escalated { --tone: var(--danger); }
+.sla-breached { --tone: var(--sev-critical); }
+.sla-not_tracked { --tone: var(--text-muted); }
 .role-reporter { --tone: var(--st-open); }
 .role-responder { --tone: var(--st-investigating); }
 .role-admin { --tone: var(--sev-high); }
@@ -386,3 +393,30 @@ input[aria-invalid='true'], select[aria-invalid='true'], textarea[aria-invalid='
   .segmented-option { flex: 1 1 50%; }
   .pagination-buttons { justify-content: space-between; }
 }
+
+/* SLA (Milestone 5B) */
+.sla-card { display: grid; gap: 0.6rem; }
+.sla-card h2 { margin-bottom: 0; }
+.sla-targets { margin: 0; display: grid; gap: 0.6rem; }
+.sla-target dt { font-size: 0.875rem; font-weight: 600; }
+.sla-target dd { margin: 0.2rem 0 0; display: grid; gap: 0.25rem; justify-items: start; }
+.sla-detail { color: var(--text-muted); overflow-wrap: anywhere; }
+.sla-note, .sla-footnote { margin: 0; }
+.sla-escalations h3 { font-size: 0.875rem; margin: 0 0 0.3rem; }
+.sla-escalations ul, .sla-history ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.25rem; font-size: 0.875rem; }
+.sla-history summary { cursor: pointer; color: var(--accent); font-size: 0.875rem; }
+.sla-cell { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.4rem; }
+.sla-summary { display: grid; gap: 0.9rem; }
+.sla-policy { display: grid; gap: 1.25rem; }
+.sla-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.sla-table th, .sla-table td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); }
+.sla-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; }
+.sla-severity { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem 0.8rem; margin: 0; display: grid; gap: 0.6rem; min-width: 0; }
+.sla-severity legend { font-weight: 650; padding: 0 0.25rem; }
+.sla-severity .field-inline { min-width: 0; }
+.sla-review { border-top: 1px solid var(--border); padding-top: 0.9rem; margin-top: 0.9rem; display: grid; gap: 0.6rem; }
+.sla-review h3 { margin: 0; font-size: 1rem; }
+.sla-review ul { margin: 0; padding-left: 1.1rem; }
+.sla-versions { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.sla-versions summary { cursor: pointer; overflow-wrap: anywhere; }
+.sla-reason-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0.4rem 0; }
