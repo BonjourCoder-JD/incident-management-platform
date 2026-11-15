@@ -40,6 +40,16 @@ def _get_visible(db: Session, incident_id: int, user: User, *, for_update: bool 
     return incident
 
 
+def incident_filters(severity: Severity | None, status: IncidentStatus | None) -> list:
+    """WHERE conditions for the list filters, shared by the list endpoint and CSV export."""
+    filters = []
+    if severity is not None:
+        filters.append(Incident.severity == severity)
+    if status is not None:
+        filters.append(Incident.status == status)
+    return filters
+
+
 def _forbid_triage_fields(user: User, fields: set[str]) -> None:
     if user.role == UserRole.REPORTER and fields & set(TRIAGE_FIELDS):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reporters cannot change status or assignment.")
@@ -78,11 +88,7 @@ def list_incidents(
     severity: Severity | None = None,
     status: IncidentStatus | None = None,
 ):
-    filters = []
-    if severity is not None:
-        filters.append(Incident.severity == severity)
-    if status is not None:
-        filters.append(Incident.status == status)
+    filters = incident_filters(severity, status)
     total = db.scalar(_visible_to(select(func.count()).select_from(Incident).where(*filters), user))
     items = db.scalars(_visible_to(select(Incident).where(*filters), user).order_by(Incident.id.desc()).limit(limit).offset(offset)).all()
     return IncidentPage(items=items, total=total or 0, limit=limit, offset=offset)

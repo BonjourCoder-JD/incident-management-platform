@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.analytics import get_analytics_connection
 from app.database import engine, get_db
+from app.exports import get_export_opener
 from app.main import app
 from app.models import User, UserRole
 from app.security import hash_password, login_limiter
@@ -48,8 +49,38 @@ def db(session_factory):
         yield session
 
 
+class BorrowedConnection:
+    """Lends the test's rolled-back connection to the CSV export and records whether it was closed."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.closed = False
+
+    def execute(self, *args, **kwargs):
+        return self._conn.execute(*args, **kwargs)
+
+    def close(self):
+        self.closed = True
+
+
+class ExportConnections:
+    def __init__(self, conn):
+        self._conn = conn
+        self.opened: list[BorrowedConnection] = []
+
+    def open(self):
+        borrowed = BorrowedConnection(self._conn)
+        self.opened.append(borrowed)
+        return borrowed
+
+
+@pytest.fixture
+def export_connections(connection):
+    return ExportConnections(connection)
+
+
 @pytest.fixture(autouse=True)
-def _isolate(session_factory, connection):
+def _isolate(session_factory, connection, export_connections):
     def override_db():
         with session_factory() as session:
             yield session
@@ -61,6 +92,7 @@ def _isolate(session_factory, connection):
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_analytics_connection] = override_analytics
+    app.dependency_overrides[get_export_opener] = lambda: export_connections.open
     login_limiter.reset()
     yield
     app.dependency_overrides.clear()

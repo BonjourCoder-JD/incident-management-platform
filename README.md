@@ -18,6 +18,7 @@ Full-stack incident management application built with React, TypeScript, FastAPI
 - Incident list with severity and status filters and pagination
 - Report-an-incident form with validation and clear error messages
 - Incident detail view with one-click status changes, assignment and editing
+- Secure CSV export: role-scoped, streamed, formula-injection safe, size-limited, and recorded in an append-only log
 - Analytics dashboard computed in PostgreSQL: volume, status and severity breakdowns, current backlog, created-versus-resolved trend and time to first resolution from the audit trail, scoped to what each role may see
 - Tamper-resistant audit trail: every change recorded with who, when and before/after values, in the same transaction, shown as a readable history
 - User management for admins and self-service password changes

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError, listIncidents } from '../api/client';
 import { SEVERITIES, STATUSES, isSeverity, isStatus, type IncidentPage, type IncidentStatus, type Severity } from '../api/types';
 import { permissions, useCurrentUser } from '../auth';
+import { ExportCsvButton } from '../components/ExportCsvButton';
 import { Alert, Email, EmptyState, LoadingState, SeverityBadge, StatusBadge } from '../components/ui';
 import { formatDateTime, SEVERITY_LABELS, STATUS_LABELS } from '../format';
 import { Link, navigate } from '../router';
@@ -97,6 +98,9 @@ export function IncidentListPage({ search }: { search: URLSearchParams }) {
               Clear filters
             </button>
           )}
+          <div className="filters-end">
+            <ExportCsvButton severity={severity} status={status} />
+          </div>
         </form>
 
         {state.kind === 'loading' && <LoadingState label="Loading incidents…" />}

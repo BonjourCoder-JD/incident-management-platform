@@ -54,7 +54,9 @@ describe('Dashboard', () => {
 
     expect(await screen.findByText('Loading dashboard…')).toBeInTheDocument();
     response.release();
-    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
+    // The heading comes from the user's role; wait for content that only exists once the data has arrived.
+    await screen.findByText('Incidents in range');
 
     const tile = (label: string) => screen.getByText(label).closest('.stat-tile') as HTMLElement;
     expect(within(tile('Incidents in range')).getByText('12')).toBeInTheDocument();

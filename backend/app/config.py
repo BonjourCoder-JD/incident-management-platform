@@ -25,6 +25,8 @@ class Settings:
     login_max_failures_per_email: int = _int("LOGIN_MAX_FAILURES_PER_EMAIL", 5)
     login_max_failures_per_ip: int = _int("LOGIN_MAX_FAILURES_PER_IP", 30)
     login_failure_window_seconds: int = _int("LOGIN_FAILURE_WINDOW_SECONDS", 15 * 60)
+    # CSV exports larger than this are refused (HTTP 413), never truncated.
+    export_max_rows: int = _int("EXPORT_MAX_ROWS", 10_000)
 
 
 settings = Settings()

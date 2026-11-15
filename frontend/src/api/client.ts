@@ -1,5 +1,7 @@
 import type {
   AnalyticsParams,
+  IncidentStatus,
+  Severity,
   AnalyticsSummary,
   Incident,
   IncidentCreate,
@@ -95,9 +97,10 @@ interface RequestOptions extends RequestInit {
   allowUnauthorized?: boolean;
 }
 
-async function request<T>(path: string, { allowUnauthorized, ...init }: RequestOptions = {}): Promise<T> {
+/** Sends a request and returns the successful response; every failure becomes an ApiError. */
+async function send(path: string, { allowUnauthorized, ...init }: RequestOptions = {}, accept = 'application/json'): Promise<Response> {
   const method = (init.method ?? 'GET').toUpperCase();
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = { Accept: accept };
   if (init.body) headers['Content-Type'] = 'application/json';
   if (UNSAFE_METHODS.has(method) && csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
@@ -121,6 +124,11 @@ async function request<T>(path: string, { allowUnauthorized, ...init }: RequestO
     if (response.status === 401 && !allowUnauthorized) onUnauthorized?.();
     throw error;
   }
+  return response;
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const response = await send(path, options);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
@@ -196,6 +204,38 @@ export function listIncidentEvents(id: number, params: { limit: number; offset: 
 export function getAnalyticsSummary(params: AnalyticsParams, signal?: AbortSignal): Promise<AnalyticsSummary> {
   const query = new URLSearchParams({ from: params.from, to: params.to, tz: params.tz });
   return request<AnalyticsSummary>(`/analytics/summary?${query.toString()}`, { signal });
+}
+
+// ---- CSV export ---------------------------------------------------------------------------
+
+export interface CsvDownload {
+  blob: Blob;
+  filename: string;
+  /** Rows in the file, from X-Export-Row-Count. */
+  rowCount: number | null;
+}
+
+const SAFE_FILENAME = /^[A-Za-z0-9._-]{1,100}$/;
+
+/** Filename from Content-Disposition, accepted only if it is a plain, safe name. */
+export function filenameFrom(disposition: string | null, fallback = 'incidents.csv'): string {
+  const name = disposition ? /filename="([^"]+)"/.exec(disposition)?.[1] : undefined;
+  return name && SAFE_FILENAME.test(name) && name.endsWith('.csv') ? name : fallback;
+}
+
+/** Downloads the incidents the user may see, with the list's filters. Over the limit: ApiError 413. */
+export async function downloadIncidentsCsv(filters: { severity?: Severity; status?: IncidentStatus }, signal?: AbortSignal): Promise<CsvDownload> {
+  const query = new URLSearchParams();
+  if (filters.severity) query.set('severity', filters.severity);
+  if (filters.status) query.set('status', filters.status);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  const response = await send(`/exports/incidents.csv${suffix}`, { signal }, 'text/csv');
+  const count = Number(response.headers.get('X-Export-Row-Count'));
+  return {
+    blob: await response.blob(),
+    filename: filenameFrom(response.headers.get('Content-Disposition')),
+    rowCount: Number.isFinite(count) && response.headers.has('X-Export-Row-Count') ? count : null,
+  };
 }
 
 export async function checkHealth(signal?: AbortSignal): Promise<boolean> {

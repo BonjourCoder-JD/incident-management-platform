@@ -23,6 +23,12 @@ class UserRole(str, enum.Enum):
     RESPONDER = "responder"
     ADMIN = "admin"
 
+class ExportOutcome(str, enum.Enum):
+    # Only what the server knows: the export was started (streaming began) or refused.
+    # A completed download is not recorded because the server cannot confirm it.
+    INITIATED = "initiated"
+    REJECTED = "rejected"
+
 class IncidentEventAction(str, enum.Enum):
     CREATED = "created"
     UPDATED = "updated"
@@ -113,3 +119,23 @@ class IncidentEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     actor: Mapped[User] = relationship(lazy="joined")
+
+
+class IncidentExport(Base):
+    """Append-only record of each CSV export request (migration 0005).
+
+    UPDATE, DELETE and TRUNCATE are rejected by a database trigger; the actor foreign key is
+    RESTRICT so a record never loses its user.
+    """
+    __tablename__ = "incident_exports"
+    __table_args__ = (Index("ix_incident_exports_actor_id_created_at", "actor_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    outcome: Mapped[ExportOutcome] = mapped_column(_enum(ExportOutcome, "export_outcome"), nullable=False)
+    # {"severity": ..., "status": ...}; validated enum values or null.
+    filters: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # Rows matching the request (for a rejection, the count that exceeded the limit).
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    row_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

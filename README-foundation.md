@@ -60,7 +60,7 @@ Use your own email address and a unique passphrase of at least 12 characters. Th
 
 Every rule is enforced by the API; the interface only hides what a role cannot use. Sessions use an HttpOnly cookie plus a CSRF token, and signing in is rate-limited. See [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md#authentication-and-session-design) for the full security design.
 
-Optional backend settings (environment variables): `SESSION_ABSOLUTE_HOURS` (default 12), `SESSION_IDLE_MINUTES` (default 120), `LOGIN_MAX_FAILURES_PER_EMAIL` (default 5), `LOGIN_MAX_FAILURES_PER_IP` (default 30), `LOGIN_FAILURE_WINDOW_SECONDS` (default 900), and `SESSION_COOKIE_SECURE` (default `true`; browsers accept secure cookies on `http://localhost`, so only set `false` for other plain-HTTP test hosts).
+Optional backend settings (environment variables): `EXPORT_MAX_ROWS` (default 10,000), `SESSION_ABSOLUTE_HOURS` (default 12), `SESSION_IDLE_MINUTES` (default 120), `LOGIN_MAX_FAILURES_PER_EMAIL` (default 5), `LOGIN_MAX_FAILURES_PER_IP` (default 30), `LOGIN_FAILURE_WINDOW_SECONDS` (default 900), and `SESSION_COOKIE_SECURE` (default `true`; browsers accept secure cookies on `http://localhost`, so only set `false` for other plain-HTTP test hosts).
 
 **Audit trail:** every incident creation and change is recorded with the signed-in user, the time and the before/after values, in the same transaction as the change. Records cannot be edited or deleted through the app, and a database trigger blocks `UPDATE`, `DELETE` and `TRUNCATE` on them (see the limits in [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md#audit-trail-design-milestone-2)). History starts when migration `0003` is applied; earlier changes are not backfilled.
 
@@ -73,6 +73,7 @@ The web interface at http://localhost:5173 asks you to sign in, then lets you:
 - **Browse incidents** (reporters see only their own, under "My incidents") newest first, filter by severity and status, and page through results (10 per page). Filters and the page number are kept in the URL, so filtered views can be bookmarked and the browser Back button works.
 - **Report an incident** at `/incidents/new`, with inline validation that mirrors the API rules (required title up to 200 characters, required description and severity). Responders and admins can also choose an assignee.
 - **Open an incident** at `/incidents/{id}` to edit its title, description and severity. Responders and admins can also change its status in one click and reassign it. Only changed fields are sent.
+- **Export to CSV** from the incident list: "Export CSV" downloads the incidents you may see with the current filters (up to 10,000 rows; larger exports are refused, never cut short). Text that could start a spreadsheet formula is prefixed with an apostrophe, and every export request is recorded.
 - **See the dashboard** at `/dashboard`: incidents created, still open and resolved in a chosen date range (last 7/30/90 days, 12 months or custom, in your browser's time zone), breakdowns by status and severity, the current open backlog, a created-versus-resolved trend (with a table view), and time to first resolution measured from the audit trail. Reporters see figures for their own incidents only.
 - **Review its history** on the same page: who created it, and every later change to the title, description, severity, status or assignee, newest first, with long description changes collapsed. Reporters see the history of their own incidents only.
 - **Manage users** at `/users` (admins only): create accounts, change roles, deactivate and reactivate.
@@ -105,6 +106,7 @@ All incident and user endpoints require a signed-in session (401 otherwise), and
 | `GET` | `/incidents` | List visible incidents, newest first. Query: `limit` (1–100, default 20), `offset` (≥0), `severity`, `status` |
 | `GET` | `/incidents/{incident_id}` | Get one incident (404 if it does not exist or is not visible to you) |
 | `PATCH` | `/incidents/{incident_id}` | Update `title`, `description`, `severity`; responders and admins also `status` and `assignee_id` |
+| `GET` | `/exports/incidents.csv` | CSV of the incidents you may see, with optional `severity`/`status`; 413 above `EXPORT_MAX_ROWS` (default 10,000). Read-only; each request is recorded. |
 | `GET` | `/analytics/summary` | Dashboard figures for `from`–`to` (inclusive dates, at most 366 days) in time zone `tz`; reporters get their own incidents only. Read-only. |
 | `GET` | `/incidents/{incident_id}/events` | Audit history, newest first: `limit` (1–100, default 20), `offset`. Same visibility as the incident. Read-only. |
 

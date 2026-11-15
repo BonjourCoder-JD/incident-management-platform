@@ -1,6 +1,6 @@
 # Project Specification — Security Incident Management Platform
 
-Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed
+Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed · Milestone 4 (secure CSV export) implemented and verified locally, **not yet committed**
 
 A full-stack application for reporting, triaging and resolving security incidents. It is intended to be employer-ready: working end to end, tested automatically, secure by default, and documented.
 
@@ -30,6 +30,7 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 | API | FastAPI, Pydantic v2 schemas | `backend/app/main.py`, `auth.py`, `users.py`, `incidents.py`, `schemas.py` |
 | Audit trail | Append-only `incident_events` table, written in the same transaction as each incident change | `backend/app/audit.py`, migration `0003` |
 | Analytics | PostgreSQL aggregates in one read-only snapshot; React dashboard with dependency-free SVG/CSS charts | `backend/app/analytics.py`, migration `0004`; `frontend/src/pages/DashboardPage.tsx`, `frontend/src/components/dashboard/` |
+| CSV export | Streamed, formula-safe CSV from a read-only snapshot; every request recorded in an append-only table | `backend/app/exports.py`, migration `0005`; `frontend/src/components/ExportCsvButton.tsx` |
 | Security | Argon2id hashing (`argon2-cffi`), session tokens, login rate limiting | `backend/app/security.py`, `auth.py`, `config.py` |
 | Persistence | SQLAlchemy 2 ORM, Alembic migrations | `backend/app/models.py`, `database.py`, `backend/migrations/` |
 | Database | PostgreSQL 17 | `compose.yaml` service `db` |
@@ -76,7 +77,7 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 - Incidents a reporter may not see return **404**, identical to a missing incident, so their existence is not revealed.
 - Ownership (`reporter_id`) is always taken from the session; a client-supplied `reporter_id` is rejected (422).
 - Assignees must be active responders or admins (otherwise 422).
-- **The visibility rule lives in one function (`_visible_to` in `backend/app/incidents.py`). Audit history (Milestone 2) and every analytics query (Milestone 3, including the event-based resolution queries) use it; CSV export must reuse it.**
+- **The visibility rule lives in one function (`_visible_to` in `backend/app/incidents.py`). Audit history (Milestone 2), every analytics query (Milestone 3, including the event-based resolution queries) and the CSV export's count and row queries (Milestone 4) use it.**
 - Incident history follows incident visibility: reporters can read the history of their own incidents only (404 otherwise, including legacy incidents); responders and admins can read every incident's history.
 
 ### Audit trail design (Milestone 2)
@@ -123,6 +124,25 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 - **Not added:** a `(reporter_id, created_at)` index (the planner used it, but it changed timings by about 1 ms either way, so the existing `ix_incidents_reporter_id` is kept), and a time-ordered resolution index (never chosen by the planner).
 - **Query restructuring mattered more than indexes:** the first design recomputed first resolutions in four separate queries (staff: 211 ms for 30 days, 400 ms for 366 days); computing the cohort once with `GROUPING SETS`, scanning only in-range resolution events and replacing repeated per-row legacy checks brought staff to the figures above.
 
+### CSV export design (Milestone 4)
+
+`GET /exports/incidents.csv?severity=&status=` (approved path; it avoids the dynamic `/incidents/{incident_id}` route).
+
+| Topic | Decision | Notes and limits |
+|---|---|---|
+| Scope | Same `severity`/`status` filters and validation as the incident list (shared `incident_filters`), newest first, restricted with `_visible_to`: reporters export only their own incidents; responders and admins export everything. | Signed out: 401. Read-only route (`GET`); writes return 405. |
+| Order of operations | 1) open a dedicated `REPEATABLE READ, READ ONLY` connection; 2) count the matching rows in that snapshot; 3) over the limit: record `rejected`, close, answer **413** before any data; 4) otherwise record `initiated` (committed) **before** the first byte; 5) stream. | The count and the rows come from the same snapshot, so `X-Export-Row-Count` matches the file. |
+| Limit | `EXPORT_MAX_ROWS`, default **10,000**. Over the limit is refused with 413 and a message to narrow the filters; **never truncated**. | Exactly the limit is allowed (tested). |
+| Format | Columns `id, title, description, severity, status, reporter_email, assignee_email, created_at_utc, updated_at_utc`; UTF-8 with BOM (for Excel); Python `csv` writer, minimal RFC 4180 quoting, **CRLF** record endings; timestamps ISO 8601 UTC (`Z`). | Embedded newlines stay inside quoted fields. |
+| Headers | `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="incidents-<date>[-<severity>][-<status>].csv"` (built only from the UTC date and validated enum values), `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `X-Export-Row-Count`. | The browser saves under a name that passes a strict pattern check (`[A-Za-z0-9._-]+.csv`); anything else falls back to `incidents.csv`. |
+| Formula injection | Every text cell (title, description, emails) gets a leading apostrophe when its **first character, or first non-whitespace character**, is one of `= + - @`, tab, CR, LF or the full-width `＝ ＋ － ＠`. Server-generated values (id, enums, timestamps) are never altered. | Limits are recorded as ISSUE-15. Benign text such as "A=B" is unchanged; text starting with "-" (e.g. "-5 °C") gains a visible apostrophe in raw CSV. |
+| Streaming and memory | Server-side cursor (`stream_results`), batches of 500 rows. Peak Python memory measured at about **1.2 MB whether 3,000 or 50,000 rows** are streamed. | — |
+| Cleanup | The export connection is closed by the stream's `finally` (end, error, or abandoned stream), by the endpoint when refusing or failing before streaming, and by a response background task; closing twice is harmless. | Tested on every path, including a real pooled connection returned to the pool after an abandoned stream. |
+| Records | Append-only `incident_exports`: actor, outcome `initiated` or `rejected`, filters, matched row count, limit in force, time. A trigger blocks `UPDATE`, `DELETE` and `TRUNCATE`; the actor foreign key is `RESTRICT`. **A completed download is never claimed**: `initiated` means streaming began. | Same trigger limits as the audit trail (ISSUE-12). No review screen yet (ISSUE-16). |
+| Frontend | "Export CSV" in the incident list's filter row, using the URL's filters; accessible name names the scope (e.g. "Export CSV (High, Open)"); busy state ("Preparing export…", disabled), live-region announcement and a visible "CSV download started — N incidents (file)" message (the app hands the file to the browser and never claims the save completed); 413 shown as "Too many incidents to export" without Retry; other errors with Retry; a 401 returns to sign-in. | The object URL is revoked and the temporary link removed after each download. |
+
+**Benchmark (50,000 incidents, 225,547 events; staff unless noted):** High+Open 3,104 rows in 108 ms; 22,315 rows in 668 ms; all 50,000 rows in 1,584 ms (the last two above the limit, benchmark only); one reporter's 263 rows in 21 ms. About 32 µs per row, so a 10,000-row export takes roughly 0.3 s (interpolated, not measured at exactly 10,000). The count uses the existing `ix_incidents_status_severity` (3.2 ms); reporter exports use `ix_incidents_reporter_id`. **No new index was needed.**
+
 ### Data model
 
 **`users`** (migration `0002`)
@@ -164,6 +184,8 @@ Indexes: `ix_incidents_status_severity`, `ix_incidents_reporter_id`, `ix_inciden
 | `changes` | `JSONB`, not null | `{"field": {"from": old, "to": new}}` for allowlisted fields only |
 | `created_at` | timestamptz | set by the database at insert |
 
+**`incident_exports`** (migration `0005`): append-only record of CSV export requests: `id`, `actor_id` (FK → `users`, `RESTRICT`), `outcome` (enum `export_outcome`: `initiated`, `rejected`), `filters` (JSONB `{severity, status}`), `row_count`, `row_limit`, `created_at`. Index `ix_incident_exports_actor_id_created_at`. A trigger rejects `UPDATE`, `DELETE`, `TRUNCATE`.
+
 Indexes: `ix_incident_events_incident_id_id (incident_id, id)`, `ix_incident_events_actor_id`, and the partial `ix_incident_events_first_resolution (incident_id, created_at) WHERE status moved to resolved/closed` (migration `0004`).
 
 **Legacy data strategy (migration `0002`).** Every existing incident is preserved. Incidents created before accounts existed keep `reporter_id = NULL` and are visible to responders and admins only. Existing `assignee_id` values are set to `NULL`, because no users existed before this migration, so they could not refer to anyone; this step is not reversed by a downgrade. The downgrade otherwise removes the users and sessions tables, the ownership column, both foreign keys and the `user_role` type.
@@ -184,6 +206,7 @@ All `/incidents` and `/users` endpoints require a session (**401** otherwise). S
 | `GET` | `/incidents/{id}` | Any role | 404 if missing **or not visible** |
 | `PATCH` | `/incidents/{id}` | Any role | Partial update. Reporters: own incidents, no `status`/`assignee_id` (403). Only `assignee_id` may be `null`. |
 | `GET` | `/incidents/{id}/events` | Any role (visibility applies) | Audit history newest first. `limit` 1–100 (default 20), `offset` ≥ 0. Returns `{items, total, limit, offset, users}`; each item is `{id, action, changes, actor: {id, email}, created_at}`. 404 when the incident is missing or not visible. No write methods (405). |
+| `GET` | `/exports/incidents.csv` | Any role (visibility applies) | Optional `severity`, `status`. Streams the CSV described in *CSV export design*. 413 above `EXPORT_MAX_ROWS` (default 10,000) with `X-Export-Row-Count`; 422 for invalid filters. Each request is recorded in `incident_exports`. Read-only (405 for writes). |
 | `GET` | `/analytics/summary` | Any role (visibility applies) | `from`, `to` (inclusive dates), `tz` (IANA). Returns `{scope, range, totals, by_status, by_severity, open_backlog_by_severity, trend, resolution}`; see *Analytics design*. 422 for invalid ranges or time zones. Read-only (405 for writes). |
 | `GET` | `/users/assignees` | Responder, admin | Active responders and admins as `{id, email}` |
 | `GET` | `/users` | Admin | All accounts |
@@ -195,6 +218,31 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 ---
 
 ## Completed functionality
+
+### Milestone 4 — Secure CSV export
+
+Implemented and verified locally on 2026-11-15. **Not yet committed**; CI confirmation will be recorded here after the push.
+
+| Functionality | Status | Evidence |
+|---|---|---|
+| Headers, BOM, CRLF, 9 columns, quoting, Unicode and UTC timestamps round-trip | **Verified (local)** | `test_export.py::test_headers_bom_crlf_and_columns`, `::test_quoting_unicode_and_timestamps_round_trip`, `::test_empty_export_has_only_the_header`; browser download parsed |
+| Formula-injection defence in every text column (16 payloads: `= + - @`, tab, CR, LF, `HYPERLINK`, DDE-style, leading spaces/tab/ideographic space, full-width forms); harmless text and server values untouched | **Verified (local)** | `::test_formula_triggers_are_neutralised_in_every_text_column` (16 cases), `::test_harmless_text_is_unchanged` (7 cases), `::test_server_generated_values_are_not_altered`; browser download |
+| Same filters as the list, newest first, filter-named filename, 422 for invalid filters | **Verified (local)** | `::test_filters_and_newest_first` |
+| Reporters export only their own incidents (no other reporter's or legacy rows, emails or text); staff export everything | **Verified (local)** | `::test_reporters_export_only_their_own_incidents`, `::test_staff_export_everything`, `::test_export_query_applies_the_visibility_rule`; browser check with two reporters |
+| 401 signed out; read-only route | **Verified (local)** | `::test_requires_authentication_and_is_read_only` |
+| Over-limit refused with 413 before streaming, never truncated; exactly the limit allowed | **Verified (local)** | `::test_over_limit_is_refused_before_streaming_and_never_truncated`; browser check at a limit of 5 (5 rows allowed, 6 refused) |
+| Every export recorded (`initiated` before streaming, `rejected` when refused) with actor, filters, row count and limit; records append-only | **Verified (local)** | `::test_every_export_is_recorded_with_actor_and_filters`, `::test_export_records_are_append_only` (3 cases); `psql` on the disposable stack |
+| Connection closed after success, refusal, failure before streaming, failure mid-stream and an abandoned stream; dedicated read-only `REPEATABLE READ` snapshot | **Verified (local)** | `::test_connection_closed_after_successful_stream`, `::test_connection_closed_when_failing_before_streaming`, `::test_connection_closed_and_export_recorded_when_stream_fails`, `::test_abandoned_stream_closes_the_real_connection`, `::test_real_export_connection_is_a_read_only_repeatable_read_snapshot` |
+| Migration `0005` upgrade, downgrade to base, re-upgrade; `alembic check` | **Verified (local)** | CI-equivalent run on a disposable PostgreSQL |
+| Export button: current filters, `text/csv` request with session cookie, server filename (unsafe names rejected), object URL revoked and link removed, busy state, success and 413 messages, Retry, 401 hand-off, reporter access | **Verified (local)** | `ExportCsvButton.test.tsx` (13 tests); browser check with real downloads |
+
+**Test-quality check:** 18 backend export rules were deliberately broken one at a time (visibility on rows and on the count; filters; first-visible-character check; full-width triggers; email cells; BOM; CRLF; limit off by one; limit not enforced; initiated and rejected records; closing on stream end and on pre-stream failure; read-only snapshot; `no-store`; `nosniff`; UTC timestamps): all 18 caught. 8 frontend behaviours were broken the same way (filters, filename check, URL revocation, link removal, Retry on 413, busy state, accessible name, `Accept` header): all 8 caught.
+
+**Manual browser check (2026-11-15):** 16/16 checks in Chromium on a disposable stack with `EXPORT_MAX_ROWS=5`, using real downloads parsed in the test: two reporters and a responder; a `HYPERLINK` formula title neutralised; commas, quotes, newlines and emoji intact; filtered export matching the API list; refusal message at 6 rows; phone width.
+
+**Regression-test reliability improvement:** the Milestone 3 test `shows loading, then every figure with clear labels` had a latent timing race (it waited for the role-based heading instead of the data). It failed 2 of 5 local runs and passed CI only by chance; it now waits for data-dependent content and passed 8 of 8 local runs. No assertion was removed.
+
+**Dependency checks:** `npm audit` 0 vulnerabilities; `pip-audit -r backend/requirements.txt` no known vulnerabilities. No new dependencies.
 
 ### Milestone 3 — Analytics dashboard
 
@@ -285,7 +333,7 @@ Committed as `1ae693b52ed41bbcc274df03fcfa8d1ec6a64e22` on 2026-11-15 and verifi
 | CI | Backend tests on a disposable PostgreSQL; migration round trip including the admin bootstrap command; frontend tests, type check and build; Docker image builds | **Verified** | Latest: GitHub Actions run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) on `7240e3a` (Milestone 3): all four jobs **success**. Milestone 2: run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) on `ec3ed2e`: all four jobs **success**. Milestone 1: run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) on `1ae693b`: Backend tests, Migration round trip (upgrade, downgrade, schema removed, re-upgrade, `alembic check`, bootstrap admin), Frontend tests and build, and Docker images all **success**. Earlier: run [43665186312](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43665186312) on `65d2185`. |
 | Supply chain | Lockfile with `npm ci`; read-only CI token; no repository secrets | **Implemented** | `frontend/package-lock.json`, `ci.yml` |
 
-**Test counts:** 122 backend (pytest), 78 frontend (Vitest + React Testing Library). After Milestone 2: 98 and 68. After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
+**Test counts:** 165 backend (pytest), 91 frontend (Vitest + React Testing Library). After Milestone 3: 122 and 78. After Milestone 2: 98 and 68. After Milestone 1: 72 and 60. Before Milestone 1: 6 and 35.
 
 The manual browser checks were one-off Playwright scripts, not part of the repository or CI. Milestone 5 makes them permanent.
 
@@ -309,6 +357,8 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 | ISSUE-11 | `Secure` cookies work over plain HTTP only on `localhost` (a browser exception). | Any other host must use HTTPS. `SESSION_COOKIE_SECURE=false` exists for local testing only. | Milestone 6 deployment uses HTTPS. |
 | ISSUE-13 | The analytics "reopened" set is built from every audited reopening on each request (about 19 ms at 225k events), and PostgreSQL underestimates row counts for the JSONB status predicates, so the staff 366-day cohort uses a nested loop. | Fine at the benchmarked scale (staff 366 days: 136 ms at 50k incidents) but grows with event volume. | Re-benchmark in Milestone 6 at production-like volume; options are a partial index for reopen events, extended statistics, or a periodically refreshed summary table. |
 | ISSUE-14 | Analytics read the same primary database as the application. | Heavy dashboard use competes with incident writes. | Milestone 6: consider a read replica or response caching if load requires it. |
+| ISSUE-15 | CSV formula-injection defence has spreadsheet-specific limits: the leading apostrophe is hidden by Excel but may appear as a visible character in other tools (some LibreOffice and Google Sheets import paths, text editors); it protects the exported file only, not data copied out of it or re-saved without the prefix; and it targets the OWASP trigger set (`= + - @`, tab, CR, LF and their full-width forms, also after leading whitespace). | A spreadsheet user could still be tricked if they remove the apostrophe or paste the cell elsewhere. | Document for users in Milestone 6; revisit if a target application with other triggers is adopted. |
+| ISSUE-16 | CSV exports are capped per request (10,000 rows) and every request is recorded, but there is no per-user rate limit, alerting, or screen for reviewing `incident_exports`. | Repeated exports are detectable only by querying the database. | Milestone 6: export rate limiting and an admin view or alert for unusual export volume. |
 
 ---
 
@@ -339,18 +389,19 @@ A dashboard of incident metrics computed in PostgreSQL.
 - [x] Frontend dashboard page with accessible charts or tables (text equivalents for charts), loading, empty and error states, and responsive layout.
 - [x] Backend tests with seeded data assert exact aggregate values per role; frontend tests cover rendering and states.
 
-### Milestone 4 — Secure CSV export · Planned
+### Milestone 4 — Secure CSV export · Implemented (pending commit)
 
 Export the incidents a user is allowed to see, using the active filters.
 
 **Acceptance criteria**
-- [ ] `GET /incidents/export.csv` accepts the same `severity` and `status` filters as the list and returns only incidents the caller may view (same visibility rule).
-- [ ] Authentication required; permissions are identical to the list endpoint.
-- [ ] **CSV injection prevented**: cells beginning with `=`, `+`, `-`, `@`, tab or carriage return are neutralised.
-- [ ] Correct quoting of commas, quotes and newlines; UTF-8; `Content-Disposition: attachment` with a safe filename.
-- [ ] Streamed output with a documented maximum row count, so a large export cannot exhaust memory.
-- [ ] Frontend "Export CSV" button on the list that uses the current filters.
-- [ ] Tests cover filters, permissions (including cross-reporter denial), escaping, injection neutralisation and headers.
+- [x] `GET /exports/incidents.csv` (approved path, replacing the originally proposed `/incidents/export.csv`) accepts the same `severity` and `status` filters as the list and returns only incidents the caller may view (same visibility rule).
+- [x] Authentication required; permissions are identical to the list endpoint.
+- [x] **CSV injection prevented**: cells beginning with `=`, `+`, `-`, `@`, tab or carriage return are neutralised (also LF, after leading whitespace, and full-width forms).
+- [x] Correct quoting of commas, quotes and newlines; UTF-8; `Content-Disposition: attachment` with a safe filename.
+- [x] Streamed output with a documented maximum row count, so a large export cannot exhaust memory.
+- [x] Frontend "Export CSV" button on the list that uses the current filters.
+- [x] Tests cover filters, permissions (including cross-reporter denial), escaping, injection neutralisation and headers.
+- [x] Every export request recorded in an append-only table (approved addition).
 
 ### Milestone 5 — Playwright end-to-end tests in CI · Planned
 
