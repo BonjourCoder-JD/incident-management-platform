@@ -515,3 +515,14 @@ input[aria-invalid='true'], select[aria-invalid='true'], textarea[aria-invalid='
 .checkbox-field { display: flex; align-items: flex-start; gap: 0.5rem; cursor: pointer; font-size: 0.9375rem; }
 .checkbox-field input { width: auto; padding: 0; margin-top: 0.3rem; accent-color: var(--accent); }
 .timeline-triage { margin: 0.15rem 0 0; }
+
+/* Public demo (Milestone 6 Phase C): the banner states in words what the environment is. */
+.demo-banner { background: var(--info-bg); border-bottom: 1px solid var(--border-strong); color: var(--text); }
+.demo-banner p { max-width: 1240px; margin: 0 auto; padding: 0.55rem 1rem; font-size: 0.875rem; }
+.demo-accounts { border-top: 1px solid var(--border); padding-top: 1rem; display: grid; gap: 0.6rem; }
+.demo-accounts h2 { margin: 0; font-size: 1rem; }
+.demo-accounts ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+.demo-accounts li { border: 1px solid var(--border); border-radius: 8px; padding: 0.65rem 0.8rem; display: grid; gap: 0.2rem; justify-items: start; }
+.demo-accounts li p { margin: 0; overflow-wrap: anywhere; }
+.demo-accounts code { font-size: 0.875rem; }
+.demo-accounts .button { margin-top: 0.35rem; }

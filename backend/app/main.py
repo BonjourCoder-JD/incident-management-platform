@@ -7,6 +7,7 @@ from .analytics import router as analytics_router
 from .auth import router as auth_router
 from .comments import router as comments_router
 from .config import APP_ENV, production_problems
+from .demo import router as demo_router
 from .exports import router as exports_router
 from .health import router as health_router
 from .incidents import router as incidents_router
@@ -23,6 +24,7 @@ if PRODUCTION and (problems := production_problems()):
 docs = {"docs_url": None, "redoc_url": None, "openapi_url": None} if PRODUCTION else {}
 app = FastAPI(title="Incident Management API", version="0.3.0", **docs)
 app.include_router(health_router)
+app.include_router(demo_router)
 app.include_router(auth_router)
 app.include_router(incidents_router)
 app.include_router(comments_router)

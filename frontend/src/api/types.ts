@@ -369,3 +369,18 @@ export interface TriageDecisionCreate {
   note?: string;
   reason?: string;
 }
+
+// ---- Public demo (GET /demo, no sign-in needed) ----
+
+export interface DemoAccount {
+  role: UserRole;
+  email: string;
+  /** Published on purpose: the public demo's accounts. */
+  password: string;
+}
+
+export interface DemoInfo {
+  enabled: boolean;
+  reset_time_utc: string | null;
+  accounts: DemoAccount[];
+}

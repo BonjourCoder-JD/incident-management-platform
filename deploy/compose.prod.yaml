@@ -1,6 +1,7 @@
 # Production stack for one server (Milestone 6). Separate from the development compose.yaml.
 #
 #   docker compose -f deploy/compose.prod.yaml --env-file deploy/.env.production up -d --build
+#   (public demo: add --profile demo, with DEMO_MODE=true and POSTGRES_DB=incidents_demo)
 #
 # Start-up order: db (healthy) -> migrate (alembic upgrade head and the runtime role, as the owner;
 # must succeed) -> backend (ready: schema matches the code and the role is least-privilege) and
@@ -28,6 +29,8 @@ x-backend: &backend
     WRITE_LIMIT_INCIDENTS_PER_HOUR: ${WRITE_LIMIT_INCIDENTS_PER_HOUR:-20}
     WRITE_LIMIT_COMMENTS_PER_HOUR: ${WRITE_LIMIT_COMMENTS_PER_HOUR:-60}
     WRITE_LIMIT_TRIAGE_PER_HOUR: ${WRITE_LIMIT_TRIAGE_PER_HOUR:-20}
+    # Public demo: published demo accounts with protections and a banner (see app/demo.py).
+    DEMO_MODE: ${DEMO_MODE:-false}
   read_only: true
   tmpfs:
     - /tmp
@@ -88,6 +91,23 @@ services:
   worker:
     <<: *backend
     command: ["python", "-m", "app.cli", "sla-escalate", "--loop", "--interval", "60"]
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Public demo only (`--profile demo`): seeds a fresh demo database, then resets it every day at
+  # 04:00 UTC. Runs as the schema owner, and refuses any database whose name does not end in _demo.
+  demo-reset:
+    <<: *backend
+    profiles: ["demo"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-incident}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-incidents}
+      DEMO_MODE: "true"
+      DEMO_DATABASE: ${POSTGRES_DB:-incidents}
+    command: ["python", "-m", "app.cli", "demo-reset", "--daily"]
     restart: unless-stopped
     healthcheck:
       disable: true

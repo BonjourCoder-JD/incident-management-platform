@@ -3,6 +3,8 @@
 #
 #   e2e/run.sh [playwright args]              Playwright on this machine (Node 24, `npx playwright install chromium`)
 #   e2e/run.sh --in-docker [playwright args]  Playwright inside the official Playwright image (no local Node needed)
+#   e2e/run.sh --demo [...]                   The public demo: production images in demo mode, database
+#                                             incidents_demo seeded by the real daily reset, tests/demo.spec.ts
 #
 # The stack is always the Compose project "imp-e2e": its own containers, network and database volume
 # (imp-e2e_postgres_data). Passwords are random per run and never written to disk. The stack is removed
@@ -16,9 +18,14 @@ readonly PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:v1.64.1-noble"
 COMPOSE=(docker compose -p "$PROJECT" -f compose.yaml -f e2e/compose.e2e.yaml)
 
 MODE="host"
-if [[ "${1:-}" == "--in-docker" ]]; then
-  MODE="docker"
+DEMO=false
+while [[ "${1:-}" == "--in-docker" || "${1:-}" == "--demo" ]]; do
+  if [[ "$1" == "--in-docker" ]]; then MODE="docker"; else DEMO=true; fi
   shift
+done
+if [[ "$DEMO" == true ]]; then
+  COMPOSE+=(-f e2e/compose.e2e-demo.yaml)
+  [[ $# -eq 0 ]] && set -- tests/demo.spec.ts
 fi
 
 host_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
@@ -54,10 +61,13 @@ on_exit() {
 # Per-run secrets. Exported variables take precedence over a developer's .env file.
 export POSTGRES_USER="incident"
 export POSTGRES_DB="incidents"
+[[ "$DEMO" == true ]] && export POSTGRES_DB="incidents_demo"  # the reset only accepts names ending in _demo
 POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 E2E_ADMIN_PASSWORD="$(openssl rand -hex 24)"
 E2E_SLA_REPORTER_PASSWORD="$(openssl rand -hex 24)"
-export POSTGRES_PASSWORD E2E_ADMIN_PASSWORD
+E2E_APP_DB_PASSWORD="$(openssl rand -hex 24)"  # the runtime role (demo mode)
+export POSTGRES_PASSWORD E2E_ADMIN_PASSWORD E2E_APP_DB_PASSWORD
+export E2E_DEMO="$([[ "$DEMO" == true ]] && echo 1 || echo "")"
 export BOOTSTRAP_ADMIN_PASSWORD="$E2E_ADMIN_PASSWORD"
 export E2E_ADMIN_EMAIL="e2e.admin@example.com"
 export E2E_RUN_ID="${E2E_RUN_ID:-$(openssl rand -hex 3)}"
@@ -65,6 +75,7 @@ if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   echo "::add-mask::$POSTGRES_PASSWORD"
   echo "::add-mask::$E2E_ADMIN_PASSWORD"
   echo "::add-mask::$E2E_SLA_REPORTER_PASSWORD"
+  echo "::add-mask::$E2E_APP_DB_PASSWORD"
 fi
 
 trap on_exit EXIT
@@ -72,6 +83,14 @@ remove_stack  # leftovers from an interrupted earlier run
 
 echo "Starting the disposable stack (project $PROJECT)…"
 "${COMPOSE[@]}" up -d --build --wait
+if [[ "$DEMO" == true ]]; then
+  # As in production: migrations and the runtime role as the owner, the admin through the API image
+  # (runtime role), then the real daily reset seeds the synthetic demo data.
+  owner_url="postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+  "${COMPOSE[@]}" exec -T -e DATABASE_URL="$owner_url" backend sh -c "alembic upgrade head && python -m app.cli db-roles"
+  "${COMPOSE[@]}" exec -T -e BOOTSTRAP_ADMIN_PASSWORD backend python -m app.cli create-admin --email "$E2E_ADMIN_EMAIL"
+  "${COMPOSE[@]}" exec -T -e DATABASE_URL="$owner_url" -e DEMO_MODE=true -e DEMO_DATABASE="$POSTGRES_DB" backend python -m app.cli demo-reset
+else
 "${COMPOSE[@]}" exec -T backend alembic upgrade head
 "${COMPOSE[@]}" exec -T -e BOOTSTRAP_ADMIN_PASSWORD backend python -m app.cli create-admin --email "$E2E_ADMIN_EMAIL"
 
@@ -99,6 +118,7 @@ read -r E2E_SLA_FIRST_RUN_RECORDED E2E_SLA_SECOND_RUN_RECORDED <<<"$escalation_c
 export E2E_SLA_REPORTER_EMAIL E2E_SLA_OVERDUE_ID E2E_SLA_APPROACHING_ID E2E_SLA_MET_ID E2E_SLA_BREACHED_ID E2E_SLA_REOPENED_ID
 export E2E_SLA_FIRST_RUN_RECORDED E2E_SLA_SECOND_RUN_RECORDED
 "${COMPOSE[@]}" exec -T backend python -m app.cli sla-verify  # stored SLA cycles match the audit trail
+fi
 
 echo "Waiting for the frontend and API…"
 for _ in $(seq 1 60); do
@@ -114,7 +134,7 @@ if [[ "$MODE" == "host" ]]; then
 else
   MSYS_NO_PATHCONV=1 docker run --rm --init \
     --network "container:${PROJECT}-frontend-1" \
-    -e CI -e E2E_ADMIN_EMAIL -e E2E_ADMIN_PASSWORD -e E2E_RUN_ID \
+    -e CI -e E2E_ADMIN_EMAIL -e E2E_ADMIN_PASSWORD -e E2E_RUN_ID -e E2E_DEMO \
     -e E2E_SLA_REPORTER_EMAIL -e E2E_SLA_REPORTER_PASSWORD -e E2E_SLA_OVERDUE_ID -e E2E_SLA_APPROACHING_ID -e E2E_SLA_MET_ID \
     -e E2E_SLA_BREACHED_ID -e E2E_SLA_REOPENED_ID -e E2E_SLA_FIRST_RUN_RECORDED -e E2E_SLA_SECOND_RUN_RECORDED \
     -e E2E_LEGACY_READONLY_ID -e E2E_LEGACY_RESOLVE_ID -e E2E_BASE_URL="http://localhost:5173" \

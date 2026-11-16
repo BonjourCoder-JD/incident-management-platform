@@ -150,7 +150,7 @@ Approved 2026-11-16 (plan with decisions: donut with an exact-count legend, a ma
 
 ### Production deployment design (Milestone 6)
 
-Approved 2026-11-16: a public portfolio demo on one Oracle Cloud Always Free ARM server (subject to capacity), Docker Compose, Caddy with a free DuckDNS hostname, synthetic data only, simulated AI triage (`TRIAGE_PROVIDER=fake`), no Pay As You Go upgrade. Delivered in phases A–G; **Phase A** (production images, reverse proxy, readiness) is complete and CI verified (`5e4548e`). Nothing is deployed yet.
+Approved 2026-11-16: a public portfolio demo on one Oracle Cloud Always Free ARM server (subject to capacity), Docker Compose, Caddy with a free DuckDNS hostname, synthetic data only, simulated AI triage (`TRIAGE_PROVIDER=fake`), no Pay As You Go upgrade. Delivered in phases A–G; **Phase A** (production images, reverse proxy, readiness) is complete and CI verified (`5e4548e`); the Phase B and Phase C rows are marked below. Nothing is deployed yet.
 
 | Topic | Decision (Phase A) | Notes and limits |
 |---|---|---|
@@ -166,6 +166,8 @@ Approved 2026-11-16: a public portfolio demo on one Oracle Cloud Always Free ARM
 | Input validation (Phase B) | Incident title and description, user-creation email and sign-in email reject NUL, other control characters and lone surrogates with 422 (BUG-2). Tab, line feed and carriage return stay allowed in incident text. | API-level only; no database constraint, so existing rows are not affected. |
 | Comment redaction (Phase B) | `POST /incidents/{id}/comments/{comment_id}/redaction` (admin, CSRF, reason 1–500 characters): one append-only `comment_redactions` row (who, when, why). Every comment response is built by one function that withholds the body once redacted; the reason is shown to staff only. The comment row is unchanged evidence. | Irreversible. The original text stays in the database and backups (retention: ISSUE-23). Incident text cannot be redacted. |
 | Housekeeping (Phase B) | `python -m app.cli cleanup`, run hourly by the worker: expired and idle sessions, old rate-limit events. | — |
+| Public demo (Phase C) | `DEMO_MODE=true` publishes two accounts on the sign-in page and at public `GET /demo`: `demo.reporter@example.com` and `demo.responder@example.com` (passwords shown on purpose). The administrator stays private. A banner on every page says the data is synthetic, AI triage is simulated and the demo resets daily at 04:00 UTC. Demo accounts: failed sign-ins never lock them out by email (the per-IP limit still applies, so a visitor can only lock out their own address); password change 403; an administrator cannot change their role or deactivate them (403). In demo mode the paid AI provider is refused even if configured. Outside demo mode none of this applies. | Shared accounts: visitors see each other's changes until the next reset (ISSUE-31). |
+| Daily demo reset (Phase C) | `demo-reset` service (`--profile demo`, schema owner): seeds a fresh demo database at start, then `python -m app.cli demo-reset --daily` at 04:00 UTC. An administrator resets now with `docker compose -f deploy/compose.prod.yaml --profile demo run --rm demo-reset python -m app.cli demo-reset` (exit 0 done, 2 refused, 1 failed and rolled back). Refuses unless `DEMO_MODE` is on, `DEMO_DATABASE` equals the connected database and its name ends in `_demo`. One transaction: empty every table except `users` and `alembic_version`, keep administrators, recreate the default SLA policy, the demo accounts and 15 back-dated scenarios (6 comments, 3 offline-provider suggestions) through the application's own audit and SLA code, and check SLA consistency before committing. Takes the SLA worker lock (the worker skips runs meanwhile); a 30-second lock timeout stops a stuck transaction from freezing the API; a deadlock with a request is retried up to 3 times. All sessions end at the reset. | A request caught in a deadlock with the reset can fail once (ISSUE-32). |
 | Container hardening | Backend and worker: read-only root file system, all capabilities dropped, no new privileges. Web: only `NET_BIND_SERVICE`. | Base images still use version tags; digest pinning is Phase E. |
 
 ### CSV export design (Milestone 4)
@@ -358,6 +360,25 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 
 ## Completed functionality
 
+### Milestone 6 Phase C — Public demo mode
+
+Implemented on 2026-11-16 (commit pending). Nothing is deployed. No new migrations.
+
+| Functionality | Status | Evidence |
+|---|---|---|
+| Demo information: off by default (`GET /demo` reports disabled, no accounts, no banner); in demo mode both accounts and the reset time, the banner on every page, and the accounts on the sign-in page with "use this account" buttons | **Verified (local)** | `backend/tests/test_demo.py`; `frontend/src/demo.test.tsx`; `e2e/tests/demo.spec.ts` |
+| Demo accounts at the API layer: password change 403; role change and deactivation by an administrator 403; ordinary accounts unaffected; **50 failed sign-ins from 10 addresses** (each below its per-IP limit) never lock out the demo reporter, while an ordinary account is still locked after 5 failures from different addresses | **Verified (local)** | `test_demo.py`; `demo.spec.ts` |
+| Reset guards: refused without `DEMO_MODE`, without `DEMO_DATABASE`, on a mismatched name and on a name without `_demo`, so the development, test and end-to-end databases never qualify; refused runs change nothing | **Verified (local)** | `test_demo.py` (a temporary `*_demo` database) |
+| Reset result: repeatable (identical fingerprint and user ids on every run), visitors' accounts and data removed, administrators kept, SLA cycles consistent, append-only triggers active again afterwards; an inconsistent seed rolls back and keeps the previous demo | **Verified (local)** | `test_demo.py` |
+| Reset now (administrator): exit 0 on the demo database, 2 on the test database, 1 with the previous demo intact when the reset fails | **Verified (local)** | `test_demo.py` |
+| Concurrency: a reset waits for an in-flight write and then replaces it; a stuck transaction makes it give up after the lock timeout, the previous demo stays and the API keeps working; a deadlock with a request is retried; active sessions end at the reset (401) and signing in again works; the reset waits for a worker run in progress and a worker run during a reset is skipped; repeated resets with the worker running in a loop produce no errors and consistent SLA data | **Verified (local)** | `test_demo.py` (real transactions on the demo database) |
+| No paid AI in demo mode: `build_provider` refuses the paid provider and never constructs its client, even with a key set; production start-up also refuses the paid provider or any key (Phase A); the demo end-to-end stack runs the offline provider with no key | **Verified (local)** | `test_demo.py`; `e2e/compose.e2e-demo.yaml` |
+| Public demo end to end: production images, `DEMO_MODE`, the API and worker as `imp_app`, data from the real reset; reporter isolation, responder triage with SLA states and simulated AI, dashboard, lockout and administrator protections, axe checks | **Verified (local)** | `bash e2e/run.sh --demo` (new step in the End-to-end tests job) |
+
+**Results (local, 2026-11-16):** backend **648 passed** (616 before; 32 new) in the CI-equivalent sequence, migration round trip clean; frontend **179 passed** (174 before; 5 new), build clean; end to end **70 passed** (the 4 public-demo tests skipped) on the development images and **4/4** in the public-demo run. Docker volumes and the development database unchanged.
+
+**Deliberate-break checks** (scratch copies; each disabled one protection): backend 16 — lockout exemption removed, per-IP limit removed for demo accounts, password change allowed, administrator changes allowed, demo information published when off, reset without demo mode, without the name match, without the `_demo` suffix, visitors' accounts kept, user ids not deterministic, SLA check skipped, worker lock not taken, no lock timeout, no deadlock retry, paid AI allowed in demo mode, failed reset-now reported as success: **16 caught**. The worker-lock variant first survived (the deadlock retry hid it) and the lock-timeout variant first hung instead of failing; direct tests were added for both. Frontend 2: **2 caught**.
+
 ### Milestone 6 Phase B — Least-privilege database role, shared rate limits and comment redaction
 
 Released on 2026-11-16 as `8ea9c7267f6b4c5e73e5123f768a59b00464e3b9` (`feat: add least-privilege database role, shared rate limits and comment redaction`, 36 files). Nothing is deployed. New migrations: `0009` (`rate_limit_events`) and `0010` (`comment_redactions`, append-only).
@@ -403,7 +424,7 @@ Released on 2026-11-16 as `5e4548ed0cbfb1f8478efe2f927a7ed4ce16d8f3` (`feat: add
 
 **Local production stack** (project `imp-prodcheck`, `SITE_ADDRESS=localhost`, removed afterwards): start-up order held (database healthy, `migrate` exit 0, backend ready); HTTP 308 to HTTPS; every header above present; `/docs`, `/redoc`, `/openapi.json` 404; a 2 MB request 413. After `alembic downgrade -1`, `/api/health/ready` returned **503 `migrations_pending`** while `/api/health` stayed 200, the backend container became unhealthy and the worker logged "skipped: database not ready"; after upgrading, 200 again. A spoofed `X-Forwarded-For` through Caddy was replaced, and one sent directly to the backend from inside the network was ignored. Containers ran as users 10001 and 10002 with read-only file systems.
 
-**Remaining blockers before any public deployment:** least-privilege database role, shared rate limiting, input validation, comment redaction, write limits and session cleanup — Phase B (complete, `8ea9c72`); demo accounts with protection from per-email lockout, synthetic data and the daily reset — Phase C; backups and monitoring — Phase D; scanning, image digests and the deploy workflow — Phase E; confirming real client addresses on the server — Phase F.
+**Remaining blockers before any public deployment:** least-privilege database role, shared rate limiting, input validation, comment redaction, write limits and session cleanup — Phase B (complete, `8ea9c72`); demo accounts with protection from per-email lockout, synthetic data and the daily reset — Phase C (implemented, verified locally); backups and monitoring — Phase D; scanning, image digests and the deploy workflow — Phase E; confirming real client addresses on the server — Phase F.
 
 ### Milestone 5D — Dashboard UI/UX redesign
 
@@ -808,6 +829,8 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 | ISSUE-28 | Triage settings are read at start-up, and the budget lock serialises all reservations across the application. | Changing limits needs a restart; reservation throughput is bounded (one short transaction at a time). | Acceptable at demonstration scale; revisit with shared rate limiting (ISSUE-7). |
 | ISSUE-29 | Colour tokens use CSS `light-dark()` (Chrome and Edge 123+, Firefox 120+, Safari 17.5+). | Older browsers would show the pages without colours. | Acceptable for current browsers; add fallback values in Milestone 6 if older browsers must be supported. |
 | ISSUE-30 | The theme choice is stored per browser only, and a page load shows the operating-system theme until the script runs (a brief flash when the stored choice differs). | Minor; no data involved. | Milestone 6: consider an inline, hashed theme script once the Content Security Policy exists. |
+| ISSUE-31 | The public demo accounts are shared: every visitor signs in as the same reporter or responder, so visitors see each other's incidents, comments and status changes until the next reset. | A visitor could leave misleading or unpleasant synthetic content for up to a day. | Daily reset, per-IP write limits and administrative comment redaction; an administrator can reset now. |
+| ISSUE-32 | During the daily reset (a few seconds at 04:00 UTC) requests wait for its table locks; one caught in a deadlock with the reset is aborted by PostgreSQL, and every session ends. | A visitor at that moment can see one failed request and must sign in again. | Accepted for a demo; the reset retries deadlocks itself and gives up after 30 seconds if blocked. |
 
 ---
 
@@ -825,7 +848,7 @@ Milestones are delivered in order, each as a small, separately approved change w
 | 5B | SLA tracking, response/resolution deadlines, overdue indicators and escalation | **Complete** (`d0ea3e8`) |
 | 5C | AI-assisted incident triage with human approval | **Complete** (`4a216d7`) |
 | 5D | Dashboard UI/UX redesign with a light/dark theme toggle | **Complete** (`e3bc126`) |
-| 6 | Production hardening, observability, monitoring and deployment | In progress: Phase A complete (`5e4548e`); Phase B complete (`8ea9c72`); Phases C–G planned |
+| 6 | Production hardening, observability, monitoring and deployment | In progress: Phase A complete (`5e4548e`); Phase B complete (`8ea9c72`); Phase C verified locally; Phases D–G planned |
 | — | Final presentation: live demo, sample data, screenshots, architecture diagram, README, 60–90 s walkthrough | Planned |
 
 Technical additions listed under planned milestones are **anticipated designs, not implemented features**. Each is refined, and may change, in that milestone's approved plan.

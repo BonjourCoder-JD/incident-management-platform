@@ -2,6 +2,8 @@ import { useState, type FormEvent } from 'react';
 import { ApiError } from '../api/client';
 import { useAuth } from '../auth';
 import { Alert } from '../components/ui';
+import { useDemo } from '../demo';
+import { ROLE_LABELS } from '../auth';
 
 function minutes(seconds: number) {
   const value = Math.max(1, Math.ceil(seconds / 60));
@@ -10,6 +12,7 @@ function minutes(seconds: number) {
 
 export function LoginPage({ notice }: { notice: string | null }) {
   const { login } = useAuth();
+  const demo = useDemo();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +42,7 @@ export function LoginPage({ notice }: { notice: string | null }) {
     <section className="login" aria-labelledby="login-heading">
       <div className="card login-card">
         <h1 id="login-heading">Sign in</h1>
-        <p className="muted">Use the account your administrator created for you.</p>
+        <p className="muted">{demo.enabled ? 'Use a public demo account below, or the account your administrator created for you.' : 'Use the account your administrator created for you.'}</p>
         {notice && !error && <Alert tone="info">{notice}</Alert>}
         {error && <Alert tone="error">{error}</Alert>}
         <form className="form" noValidate onSubmit={handleSubmit}>
@@ -55,6 +58,24 @@ export function LoginPage({ notice }: { notice: string | null }) {
             {submitting ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
+        {demo.enabled && demo.accounts.length > 0 && (
+          <section className="demo-accounts" aria-labelledby="demo-accounts-heading">
+            <h2 id="demo-accounts-heading">Public demo accounts</h2>
+            <ul>
+              {demo.accounts.map(account => (
+                <li key={account.email}>
+                  <p><strong>{ROLE_LABELS[account.role]}</strong></p>
+                  <p className="small">Email: <code>{account.email}</code></p>
+                  <p className="small">Password: <code>{account.password}</code></p>
+                  <button type="button" className="button button-secondary button-small" disabled={submitting}
+                    onClick={() => { setEmail(account.email); setPassword(account.password); setError(null); }}>
+                    Use the {ROLE_LABELS[account.role].toLowerCase()} account
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
       </div>
     </section>
   );

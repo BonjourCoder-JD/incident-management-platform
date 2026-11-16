@@ -208,6 +208,11 @@ def build_provider(settings: TriageSettings) -> tuple[TriageProvider | None, str
     if settings.provider == "fake":
         return FakeProvider(), "enabled"
     if settings.provider == "anthropic":
+        from . import demo
+
+        if demo.enabled():
+            # The public demo never calls a paid AI service, whatever else is configured.
+            return None, "AI triage with a paid provider is disabled in the public demo."
         if not os.environ.get("ANTHROPIC_API_KEY"):
             return None, "AI triage is not configured (no API key)."
         if settings.prices() is None:

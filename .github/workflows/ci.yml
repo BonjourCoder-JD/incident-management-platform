@@ -208,6 +208,8 @@ jobs:
         # run.sh generates and masks per-run passwords, starts the "imp-e2e" Compose project,
         # migrates, bootstraps an admin, runs Playwright and always removes the stack.
         run: bash ./run.sh
+      - name: Run the public-demo end-to-end tests (production images, demo mode)
+        run: bash ./run.sh --demo
       - name: Upload failure evidence
         if: failure()
         uses: actions/upload-artifact@v7

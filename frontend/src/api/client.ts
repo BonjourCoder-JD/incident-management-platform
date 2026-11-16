@@ -16,6 +16,7 @@ import type {
   IncidentPage,
   IncidentUpdate,
   SessionInfo,
+  DemoInfo,
   TriageDecisionCreate,
   TriageStatus,
   TriageSuggestion,
@@ -299,6 +300,11 @@ export async function downloadIncidentsCsv(filters: { severity?: Severity; statu
     filename: filenameFrom(response.headers.get('Content-Disposition')),
     rowCount: Number.isFinite(count) && response.headers.has('X-Export-Row-Count') ? count : null,
   };
+}
+
+/** Public: whether this is the public demo, with its published accounts. */
+export function getDemoInfo(signal?: AbortSignal): Promise<DemoInfo> {
+  return request<DemoInfo>('/demo', { signal, allowUnauthorized: true });
 }
 
 export async function checkHealth(signal?: AbortSignal): Promise<boolean> {

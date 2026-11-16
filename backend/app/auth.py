@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
-from . import rate_limit
+from . import demo, rate_limit
 from .models import AuthSession, User, UserRole
 from .schemas import LoginRequest, PasswordChange, SessionInfo, UserRead
 from .security import (
@@ -131,6 +131,9 @@ def login(payload: LoginRequest, request: Request, response: Response, db: DbSes
         rate_limit.Limit(rate_limit.LOGIN_EMAIL, email, settings.login_max_failures_per_email, window),
         rate_limit.Limit(rate_limit.LOGIN_IP, _client_ip(request), settings.login_max_failures_per_ip, window),
     ]
+    if demo.is_demo_account(email):
+        # Published demo accounts: anyone could lock them by email, so only the per-IP limit applies.
+        limits = limits[1:]
     # Shared by every process and kept across restarts (PostgreSQL); attempts on the same email or
     # address are serialised until this transaction ends.
     rate_limit.lock(db, limits)
@@ -175,7 +178,8 @@ def login(payload: LoginRequest, request: Request, response: Response, db: DbSes
         expires_at=_now() + timedelta(hours=settings.session_absolute_hours),
     )
     db.add(session)
-    rate_limit.reset(db, limits[0])  # a successful sign-in clears that email's failures
+    if limits[0].bucket == rate_limit.LOGIN_EMAIL:
+        rate_limit.reset(db, limits[0])  # a successful sign-in clears that email's failures
     db.commit()
     db.refresh(session)
     _set_session_cookie(response, token)
@@ -202,6 +206,8 @@ def me(session: Annotated[AuthSession, Depends(get_current_session)]):
 @router.put("/password", status_code=status.HTTP_204_NO_CONTENT)
 def change_password(payload: PasswordChange, session: Annotated[AuthSession, Depends(get_current_session)], db: DbSession):
     user = session.user
+    if demo.is_demo_account(user.email):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The password of a public demo account cannot be changed.")
     if not verify_password(user.password_hash, payload.current_password[:PASSWORD_MAX_LENGTH]) or len(payload.current_password) > PASSWORD_MAX_LENGTH:
         raise HTTPException(
             status_code=422,

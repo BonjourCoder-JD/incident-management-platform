@@ -14,6 +14,7 @@ import { SlaPolicyPage } from './pages/SlaPolicyPage';
 import { UsersPage } from './pages/UsersPage';
 import { Link, useLocation, type Route } from './router';
 import { useTheme } from './theme';
+import { DemoBanner, DemoProvider } from './demo';
 
 type ApiStatus = 'checking' | 'connected' | 'unavailable';
 
@@ -111,6 +112,7 @@ function Layout({ user, children }: { user?: User; children: ReactNode }) {
   return (
     <div className="app">
       <a className="skip-link" href="#main">Skip to content</a>
+      <DemoBanner />
       <header className="app-header">
         <div className="app-header-inner">
           <div className="app-header-start">
@@ -194,10 +196,12 @@ function Shell() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <FlashProvider>
-        <Shell />
-      </FlashProvider>
-    </AuthProvider>
+    <DemoProvider>
+      <AuthProvider>
+        <FlashProvider>
+          <Shell />
+        </FlashProvider>
+      </AuthProvider>
+    </DemoProvider>
   );
 }

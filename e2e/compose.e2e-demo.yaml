@@ -1,0 +1,28 @@
+# Public-demo end-to-end run (e2e/run.sh --demo): the production images in demo mode, the API running
+# as the least-privilege runtime role, a database named incidents_demo seeded by the real daily reset.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.31.6.0/24
+services:
+  backend:
+    build:
+      context: ./backend
+      target: prod
+    environment:
+      APP_ENV: production
+      SESSION_COOKIE_SECURE: "true"
+      FORWARDED_ALLOW_IPS: 172.31.6.10
+      DEMO_MODE: "true"
+      DATABASE_URL: postgresql+psycopg://imp_app:${E2E_APP_DB_PASSWORD}@db:5432/${POSTGRES_DB}
+      APP_DB_PASSWORD: ${E2E_APP_DB_PASSWORD}
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/web.Dockerfile
+    environment:
+      SITE_ADDRESS: ":5173"
+    networks:
+      default:
+        ipv4_address: 172.31.6.10

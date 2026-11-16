@@ -131,6 +131,49 @@ def db_roles() -> int:
     return 0
 
 
+def demo_reset(daily: bool) -> int:
+    """Resets the public demo database (refused for any other database). Without --daily this is the
+    administrator's "reset now" (same transaction, same guards); with --daily, seeds a fresh demo
+    database immediately, then resets every day at 04:00 UTC. Run as the schema owner."""
+    from datetime import datetime, timezone
+
+    from .database import engine
+    from .demo_reset import DemoResetRefused, needs_initial_seed, reset, seconds_until_next_reset
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    def run_once() -> int:
+        try:
+            result = reset(engine)
+        except DemoResetRefused as refused:
+            print(f"demo-reset refused: {refused}", file=sys.stderr, flush=True)
+            return 2
+        except Exception:  # one transaction: nothing was changed
+            logging.getLogger(__name__).exception("Demo reset failed and was rolled back")
+            return 1
+        print(f"Demo reset: {result.incidents} incidents, {result.comments} comments, {result.triage_suggestions} triage "
+              f"suggestions; {result.cycles_checked} SLA cycles consistent.", flush=True)
+        return 0
+
+    if not daily:
+        return run_once()
+    # A refused or failed reset is logged and retried at the next 04:00 UTC; the schedule never
+    # exits (a refused target would otherwise restart in a loop under `restart: unless-stopped`).
+    try:
+        if needs_initial_seed(engine):
+            run_once()
+    except Exception:
+        logging.getLogger(__name__).exception("Initial demo seed failed")
+    while True:
+        wait = seconds_until_next_reset(datetime.now(timezone.utc))
+        print(f"Next demo reset in {int(wait)} s (04:00 UTC).", flush=True)
+        time.sleep(wait)
+        try:
+            run_once()
+        except Exception:  # keep the schedule; the log names the failure
+            logging.getLogger(__name__).exception("Demo reset failed")
+
+
 def sla_verify() -> int:
     """Exit status 1 if any stored SLA cycle differs from the audit-derived reference."""
     from .database import engine
@@ -156,7 +199,12 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("sla-verify", help="Check the stored SLA cycles against the audit trail")
     commands.add_parser("cleanup", help="Remove expired sessions and old rate-limit events")
     commands.add_parser("db-roles", help="Create or update the least-privilege runtime database role (run as the owner)")
+    reset_parser = commands.add_parser("demo-reset", help="Reset the public demo database (DEMO_MODE, DEMO_DATABASE ending in _demo)")
+    reset_parser.add_argument("--daily", action="store_true", help="Seed if empty, then reset every day at 04:00 UTC")
     args = parser.parse_args(argv)
+
+    if args.command == "demo-reset":
+        return demo_reset(daily=args.daily)
 
     if args.command == "cleanup":
         return cleanup()

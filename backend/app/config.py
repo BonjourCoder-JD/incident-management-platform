@@ -31,6 +31,8 @@ class Settings:
     write_limit_incidents_per_hour: int = _int("WRITE_LIMIT_INCIDENTS_PER_HOUR", 0)
     write_limit_comments_per_hour: int = _int("WRITE_LIMIT_COMMENTS_PER_HOUR", 0)
     write_limit_triage_per_hour: int = _int("WRITE_LIMIT_TRIAGE_PER_HOUR", 0)
+    # Public demo (Milestone 6 Phase C): published demo accounts with protections; see app/demo.py.
+    demo_mode: bool = _bool("DEMO_MODE", False)
 
 
 

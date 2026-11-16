@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react';
 import { vi } from 'vitest';
 import App from '../App';
-import type { CommentPage, Incident, IncidentEventPage, IncidentSla, TriageStatus, User, UserRole, UserSummary } from '../api/types';
+import type { CommentPage, DemoInfo, Incident, IncidentEventPage, IncidentSla, TriageStatus, User, UserRole, UserSummary } from '../api/types';
 
 export const TEST_CSRF = 'test-csrf-token';
 
@@ -65,6 +65,8 @@ interface MockOptions {
   sla?: IncidentSla | Handler;
   /** Triage requests (`/triage/...`, `/incidents/{id}/triage-suggestions`, `/triage-suggestions/...`). Defaults to triage turned off. */
   triage?: Handler;
+  /** Public demo information (`/demo`), or 'error' for a failed request. Defaults to not the demo. */
+  demo?: DemoInfo | 'error';
 }
 
 const EVENTS_PATH = /^\/api\/incidents\/\d+\/events$/;
@@ -93,6 +95,10 @@ export function mockApi(handler: Handler = () => jsonResponse(500, {}), options:
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = new URL(String(input), 'http://localhost');
     if (url.pathname === '/api/health') return jsonResponse(200, { status: 'ok' });
+    if (url.pathname === '/api/demo') {
+      if (options.demo === 'error') return jsonResponse(500, {});
+      return jsonResponse(200, options.demo ?? { enabled: false, reset_time_utc: null, accounts: [] });
+    }
     if (url.pathname === '/api/auth/me') return user ? jsonResponse(200, { user, csrf_token: TEST_CSRF }) : jsonResponse(401, { detail: 'Authentication required.' });
     if (url.pathname === '/api/auth/logout') return new Response(null, { status: 204 });
     if (url.pathname === '/api/users/assignees') return jsonResponse(200, options.assignees ?? ASSIGNEES);
@@ -116,7 +122,7 @@ export function mockApi(handler: Handler = () => jsonResponse(500, {}), options:
   return fetchMock;
 }
 
-const PLUMBING = new Set(['/api/health', '/api/auth/me', '/api/users/assignees']);
+const PLUMBING = new Set(['/api/health', '/api/auth/me', '/api/users/assignees', '/api/demo']);
 
 /** Calls made to the API, excluding health, session, assignee-directory, history, discussion, SLA and triage requests. */
 export function apiCalls(fetchMock: ReturnType<typeof mockApi>) {

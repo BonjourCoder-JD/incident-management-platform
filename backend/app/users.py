@@ -6,6 +6,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from . import demo
 from .auth import require_roles
 from .database import get_db
 from .models import AuthSession, User, UserRole
@@ -57,6 +58,9 @@ def update_user(user_id: int, payload: UserUpdate, admin: Admin, db: DbSession):
     for field in ("role", "is_active"):
         if field in changes and changes[field] is None:
             raise HTTPException(status_code=422, detail=f"{field} cannot be null")
+
+    if demo.is_demo_account(user.email) and ("role" in changes or "is_active" in changes):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Public demo accounts cannot be changed.")
 
     # An admin cannot remove their own access, so at least one active admin always remains.
     if user.id == admin.id and (changes.get("role", UserRole.ADMIN) != UserRole.ADMIN or changes.get("is_active", True) is False):
