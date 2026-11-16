@@ -7,6 +7,10 @@ services:
     environment:
       # Small limit so the over-limit export path is exercised with a handful of incidents.
       EXPORT_MAX_ROWS: "5"
+      # The deterministic offline provider only. The key is forced empty so a developer's real key can
+      # never reach the end-to-end stack, and no test can make a paid call.
+      TRIAGE_PROVIDER: "fake"
+      ANTHROPIC_API_KEY: ""
   frontend:
     # A different host port, so a running development stack on 5173 is unaffected.
     ports: !override

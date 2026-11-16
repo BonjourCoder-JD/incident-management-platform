@@ -16,6 +16,10 @@ services:
     build: ./backend
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-incident}:${POSTGRES_PASSWORD:-localdevonly}@db:5432/${POSTGRES_DB:-incidents}
+      # AI triage (Milestone 5C) is off unless set: "fake" (offline test provider) or "anthropic"
+      # (paid; also needs ANTHROPIC_API_KEY). See docs/PROJECT_SPEC.md before enabling a real provider.
+      TRIAGE_PROVIDER: ${TRIAGE_PROVIDER:-off}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:

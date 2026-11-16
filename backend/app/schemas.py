@@ -2,7 +2,9 @@ import re
 from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Annotated, Any, Literal
-from .models import CommentVisibility, IncidentEventAction, IncidentStatus, Severity, SlaPolicySource, SlaTarget, UserRole
+from .models import (
+    CommentVisibility, IncidentEventAction, IncidentStatus, Severity, SlaPolicySource, SlaTarget, TriageDecisionKind, TriageOutcome, UserRole,
+)
 from .security import EMAIL_MAX_LENGTH, PASSWORD_MAX_LENGTH, is_valid_email, normalize_email, password_problem
 
 # PostgreSQL INTEGER upper bound. Larger IDs must fail validation (422), not reach the database (BUG-1).
@@ -143,6 +145,8 @@ class IncidentEventRead(BaseModel):
     changes: dict[str, dict[str, Any]]
     actor: UserSummary
     created_at: datetime
+    # Staff only: the AI triage suggestion this change came from, if any (Milestone 5C). Null for reporters.
+    triage_suggestion_id: int | None = None
 
 class IncidentEventPage(BaseModel):
     items: list[IncidentEventRead]
@@ -308,6 +312,92 @@ class SlaPolicyRead(BaseModel):
     author: UserSummary | None
     created_at: datetime
     targets: list[SlaTargetRead]
+
+
+# ---- AI triage (Milestone 5C) ------------------------------------------------------------
+
+class TriageLimits(BaseModel):
+    user_daily_usd: float
+    user_daily_remaining_usd: float
+    user_hourly_requests: int
+    user_hourly_remaining: int
+    incident_cooldown_seconds: int
+
+class TriageStatus(BaseModel):
+    enabled: bool
+    reason: str | None
+    provider: Literal["off", "fake", "anthropic"]
+    provider_label: str | None
+    # False for the deterministic test provider, which must never be presented as AI.
+    is_ai: bool
+    model: str | None
+    prompt_version: str
+    # What the model receives: these incident fields and up to five candidate titles, nothing else.
+    sent_fields: list[str]
+    typical_cost_usd: float | None
+    limits: TriageLimits | None
+
+class TriageCandidate(BaseModel):
+    id: int
+    title: str
+
+class TriageDecisionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    decision: TriageDecisionKind
+    applied_severity: Severity | None
+    resulting_event_id: int | None
+    note_comment_id: int | None
+    reason: str | None
+    decider: UserSummary
+    created_at: datetime
+
+class TriageSuggestionRead(BaseModel):
+    id: int
+    incident_id: int
+    outcome: TriageOutcome
+    # Plain-language explanation for any outcome other than "valid".
+    message: str | None
+    severity: Severity | None
+    rationale: str | None
+    next_steps: list[str]
+    duplicates: list[TriageCandidate]
+    candidates_sent: list[TriageCandidate]
+    provider: str
+    model: str
+    prompt_version: str
+    requested_by: UserSummary
+    created_at: datetime
+    cost_usd: float
+    # True once the incident has changed since the suggestion was made; it can then no longer be accepted.
+    stale: bool
+    decision: TriageDecisionRead | None
+
+class TriageSuggestionPage(BaseModel):
+    items: list[TriageSuggestionRead]
+
+class TriageDecisionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["accept", "reject"]
+    # Accept only: the severity to apply (defaults to the suggested one).
+    severity: Severity | None = None
+    add_internal_note: bool = False
+    # Accept only: the internal note text (defaults to the rationale and next steps). Comment rules apply.
+    note: str | None = Field(default=None, max_length=COMMENT_RAW_MAX_LENGTH)
+    reason: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def check_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if _COMMENT_FORBIDDEN.search(value):
+            raise ValueError("The reason cannot contain control characters.")
+        if len(value) > 500:
+            raise ValueError("The reason can be at most 500 characters.")
+        return value
 
 
 # ---- Analytics -----------------------------------------------------------------------

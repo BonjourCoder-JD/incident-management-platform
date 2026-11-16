@@ -6,3 +6,5 @@ alembic>=1.14,<2
 argon2-cffi>=25.1,<26
 pytest>=8.3,<10
 httpx>=0.28,<1
+# Claude API client for optional AI triage (Milestone 5C). Uses httpx2, separate from httpx above.
+anthropic>=2.8,<3

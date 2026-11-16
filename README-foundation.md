@@ -46,6 +46,28 @@ docker compose run --rm backend python -m app.cli sla-escalate   # one bounded r
 docker compose run --rm backend python -m app.cli sla-verify     # stored SLA cycles vs the audit trail; exit 1 on any difference
 ```
 
+### AI-assisted triage (optional, off by default)
+
+Responders and admins can ask for a suggested severity, a short rationale, next steps and possible duplicates. A suggestion never changes the incident: a person reviews it, may edit the severity, and accepts or rejects it; accepting applies the severity through the normal audited update with that person as the actor.
+
+**Synthetic data only.** Until a production retention and redaction policy exists (Milestone 6), use triage only with synthetic incidents. With the real provider, the incident title, description, severity, status and up to five other incident titles are sent to the Anthropic API.
+
+| `TRIAGE_PROVIDER` | What happens |
+|---|---|
+| `off` (default) | No triage. The panel says so. |
+| `fake` | A deterministic, offline test provider (keyword rules, labelled "Test provider (not AI)"). No network, no cost. Used by every automated test, CI and the end-to-end suite. |
+| `anthropic` | Claude through the official SDK. **Paid.** Needs `ANTHROPIC_API_KEY`; the default model is `claude-haiku-5-5` (`TRIAGE_MODEL`), and any other model also needs `TRIAGE_PRICE_INPUT_PER_MTOK` and `TRIAGE_PRICE_OUTPUT_PER_MTOK`, otherwise triage stays off. There is no automatic fallback to another model. |
+
+Spending limits (all enforced in the database before any call, counting unfinished calls at their worst-case cost): `TRIAGE_USER_DAILY_USD` (0.05), `TRIAGE_USER_HOURLY_REQUESTS` (10), `TRIAGE_INCIDENT_TOTAL_USD` (0.01), `TRIAGE_INCIDENT_COOLDOWN_SECONDS` (60), `TRIAGE_GLOBAL_DAILY_USD` (0.50), `TRIAGE_GLOBAL_DAILY_REQUESTS` (300), `TRIAGE_GLOBAL_MONTHLY_USD` (5.00); also `TRIAGE_TIMEOUT_SECONDS` (20), `TRIAGE_MAX_OUTPUT_TOKENS` (1,200) and `TRIAGE_RESERVATION_TIMEOUT_SECONDS` (600). Compose passes `TRIAGE_PROVIDER` and `ANTHROPIC_API_KEY` from your environment or `.env`; never commit a key.
+
+Evaluation on the synthetic dataset (`backend/eval/triage_cases.jsonl`, 45 cases including 12 prompt-injection attempts):
+
+```sh
+docker compose run --rm backend python -m app.triage_eval          # fake provider: checks the pipeline, not quality
+# Paid: refused unless confirmed and the worst-case cost of the run fits the cap
+docker compose run --rm -e TRIAGE_PROVIDER=anthropic backend python -m app.triage_eval --provider anthropic --confirm-spend --max-usd 0.10
+```
+
 A few concurrency tests commit synthetic rows and remove them afterwards with `session_replication_role = replica`, which needs a superuser (true for the Compose and CI databases).
 
 ## End-to-end tests
@@ -142,6 +164,10 @@ All incident and user endpoints require a signed-in session (401 otherwise), and
 | `POST` | `/incidents/{incident_id}/comments` | Add `{body, visibility}`: `visibility` is required, `public` or `internal`; reporters may post `public` only (403). `body` is 1–5,000 characters after trimming, without control characters. Comments cannot be edited or deleted. |
 | `GET` | `/incidents/{incident_id}/sla` | SLA targets, deadlines and states for every cycle, with the server time (`now`); escalations for responders and admins only. Same visibility as the incident. |
 | `GET` | `/sla/policy` | Current SLA targets per severity (any signed-in user). `GET /sla/policy/versions` and `POST /sla/policy/versions` (`{reason, targets}`) are admin-only. |
+| `GET` | `/triage/status` | Responders and admins: whether triage is available, the provider and model, what is sent, and the caller's remaining allowance. |
+| `POST` | `/incidents/{incident_id}/triage-suggestions` | Responders and admins: request a suggestion (201; never changes the incident). 503 when triage is off; 429 with `Retry-After` when a limit is reached. |
+| `GET` | `/incidents/{incident_id}/triage-suggestions` | Responders and admins: the newest 20 suggestions, with any decision and a `stale` flag. |
+| `POST` | `/triage-suggestions/{suggestion_id}/decision` | Responders and admins: `{decision: "accept"\|"reject", severity?, add_internal_note?, note?, reason?}`. Accepting applies the severity through the audited update (409 if the incident changed since, or a decision exists). |
 
 Severity: `low`, `medium`, `high`, `critical`. Status: `open`, `investigating`, `resolved`, `closed`. `assignee_id` must be an active responder or admin (1–2147483647).
 

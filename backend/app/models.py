@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from typing import Any
 from sqlalchemy import Boolean, CheckConstraint, Computed, DateTime, Enum, ForeignKey, Index, Integer, SmallInteger, String, Text, UniqueConstraint, func, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
@@ -42,6 +42,19 @@ class SlaPolicySource(str, enum.Enum):
     # default: seeded by migration 0007 (no author). admin: created through the API by an admin.
     DEFAULT = "default"
     ADMIN = "admin"
+
+class TriageOutcome(str, enum.Enum):
+    VALID = "valid"                    # a schema-valid suggestion, ready for human review
+    INVALID_OUTPUT = "invalid_output"  # the model's output failed validation; nothing is stored from it
+    REFUSED = "refused"                # the model declined (stop_reason "refusal")
+    TIMEOUT = "timeout"
+    PROVIDER_ERROR = "provider_error"
+    ABANDONED = "abandoned"            # the request never finished (crash); charged at its full reservation
+
+class TriageDecisionKind(str, enum.Enum):
+    ACCEPTED = "accepted"
+    ACCEPTED_WITH_EDITS = "accepted_with_edits"
+    REJECTED = "rejected"
 
 class IncidentEventAction(str, enum.Enum):
     CREATED = "created"
@@ -88,6 +101,8 @@ class Incident(Base):
     __table_args__ = (
         Index("ix_incidents_status_severity", "status", "severity"),
         Index("ix_incidents_created_at", "created_at"),  # analytics date ranges (migration 0004)
+        # Full-text search for triage duplicate candidates (migration 0008).
+        Index("ix_incidents_search", "search_vector", postgresql_using="gin"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -100,6 +115,13 @@ class Incident(Base):
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    # Title and description as a text-search vector (migration 0008). Generated and stored by
+    # PostgreSQL on every insert and update, so it can never drift from the text; never written by
+    # the application, never part of an API response, and not loaded unless asked for.
+    search_vector: Mapped[Any] = mapped_column(
+        TSVECTOR, Computed("to_tsvector('english'::regconfig, (((title)::text || ' '::text) || description))", persisted=True),
+        deferred=True,
+    )
 
     reporter: Mapped[User | None] = relationship(foreign_keys=[reporter_id], lazy="joined")
     assignee: Mapped[User | None] = relationship(foreign_keys=[assignee_id], lazy="joined")
@@ -303,3 +325,97 @@ class IncidentSlaCycle(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     response_breached: Mapped[bool | None] = mapped_column(Boolean, Computed("acknowledged_at > response_due_at", persisted=True))
     resolution_breached: Mapped[bool | None] = mapped_column(Boolean, Computed("resolved_at > resolution_due_at", persisted=True))
+
+
+class TriageRequest(Base):
+    """One AI triage request and its budget reservation (migration 0008). Append-only.
+
+    Written (committed) before the provider is called, under the triage budget lock, so concurrent
+    requests can never spend more than the limits. Until a TriageSuggestion records the result,
+    the full reservation counts as spent; a reservation left unresolved is closed as abandoned at
+    its full cost (app/triage.py). The input itself is never stored, only its SHA-256.
+    """
+    __tablename__ = "triage_requests"
+    __table_args__ = (
+        CheckConstraint("reserved_microusd >= 0", name="ck_triage_requests_reserved"),
+        Index("ix_triage_requests_requested_by_created_at", "requested_by", "created_at"),
+        Index("ix_triage_requests_incident_id_created_at", "incident_id", "created_at"),
+        Index("ix_triage_requests_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="RESTRICT"), nullable=False)
+    requested_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    # The incident's latest audit event when the input was read; a suggestion is stale once it changes.
+    basis_event_id: Mapped[int | None] = mapped_column(ForeignKey("incident_events.id", ondelete="RESTRICT"), nullable=True)
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Ids of the duplicate candidates sent (all visible to the requester).
+    candidate_ids: Mapped[list[int]] = mapped_column(JSONB, nullable=False)
+    reserved_microusd: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    requester: Mapped[User] = relationship(lazy="joined")
+
+
+class TriageSuggestion(Base):
+    """The result of one triage request (migration 0008). Append-only, at most one per request.
+
+    Only validated fields are stored; a model output that fails validation is discarded and only
+    its error category is kept. Costs are in micro-US$ (US$ per million tokens = micro-US$ per token).
+    """
+    __tablename__ = "triage_suggestions"
+    __table_args__ = (
+        CheckConstraint("cost_microusd >= 0", name="ck_triage_suggestions_cost"),
+        CheckConstraint(
+            "(outcome = 'valid') = (severity IS NOT NULL AND rationale IS NOT NULL AND next_steps IS NOT NULL AND duplicate_ids IS NOT NULL)",
+            name="ck_triage_suggestions_valid_fields",
+        ),
+        CheckConstraint("rationale IS NULL OR char_length(rationale) BETWEEN 1 AND 600", name="ck_triage_suggestions_rationale"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("triage_requests.id", ondelete="RESTRICT"), nullable=False, unique=True)
+    outcome: Mapped[TriageOutcome] = mapped_column(_enum(TriageOutcome, "triage_outcome"), nullable=False)
+    error_category: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    severity: Mapped[Severity | None] = mapped_column(_enum(Severity, "incident_severity"), nullable=True)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_steps: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    duplicate_ids: Mapped[list[int] | None] = mapped_column(JSONB, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_microusd: Mapped[int] = mapped_column(Integer, nullable=False)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    request: Mapped[TriageRequest] = relationship(lazy="joined")
+
+
+class TriageDecision(Base):
+    """A person's decision on a valid suggestion (migration 0008). Append-only, one per suggestion.
+
+    An accepted severity is applied through the normal audited update path with the deciding user
+    as the actor; `resulting_event_id` links that audit event back to the suggestion.
+    """
+    __tablename__ = "triage_decisions"
+    __table_args__ = (
+        CheckConstraint("reason IS NULL OR char_length(reason) BETWEEN 1 AND 500", name="ck_triage_decisions_reason"),
+        CheckConstraint(
+            "decision <> 'rejected' OR (applied_severity IS NULL AND resulting_event_id IS NULL AND note_comment_id IS NULL)",
+            name="ck_triage_decisions_rejected_changes_nothing",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    suggestion_id: Mapped[int] = mapped_column(ForeignKey("triage_suggestions.id", ondelete="RESTRICT"), nullable=False, unique=True)
+    decided_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    decision: Mapped[TriageDecisionKind] = mapped_column(_enum(TriageDecisionKind, "triage_decision_kind"), nullable=False)
+    applied_severity: Mapped[Severity | None] = mapped_column(_enum(Severity, "incident_severity"), nullable=True)
+    resulting_event_id: Mapped[int | None] = mapped_column(ForeignKey("incident_events.id", ondelete="RESTRICT"), nullable=True, unique=True)
+    note_comment_id: Mapped[int | None] = mapped_column(ForeignKey("incident_comments.id", ondelete="RESTRICT"), nullable=True, unique=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    decider: Mapped[User] = relationship(lazy="joined")

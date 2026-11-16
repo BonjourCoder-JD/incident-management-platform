@@ -173,6 +173,7 @@ def test_csrf_route_inventory_is_complete():
         ("POST", "/incidents"), ("PATCH", "/incidents/{incident_id}"),
         ("POST", "/incidents/{incident_id}/comments"),
         ("POST", "/sla/policy/versions"),
+        ("POST", "/incidents/{incident_id}/triage-suggestions"), ("POST", "/triage-suggestions/{suggestion_id}/decision"),
         ("POST", "/users"), ("PATCH", "/users/{user_id}"),
     }
 
@@ -180,7 +181,7 @@ def test_csrf_route_inventory_is_complete():
 @pytest.mark.parametrize("method, path", _state_changing_routes())
 def test_every_state_changing_route_rejects_missing_or_wrong_csrf(method, path, login_as, admin, db):
     client = login_as(admin)
-    url = path.replace("{incident_id}", "1").replace("{user_id}", str(admin.id))
+    url = path.replace("{incident_id}", "1").replace("{user_id}", str(admin.id)).replace("{suggestion_id}", "1")
     for headers in ({"X-CSRF-Token": ""}, {"X-CSRF-Token": "wrong-token"}):
         response = client.request(method, url, json={}, headers=headers)
         assert response.status_code == 403, (method, path, headers, response.text)

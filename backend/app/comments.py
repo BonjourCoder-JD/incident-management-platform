@@ -66,14 +66,21 @@ def list_comments(
     return CommentPage(items=[CommentRead.model_validate(c) for c in comments], total=total or 0, limit=limit, offset=offset)
 
 
+def add_comment(db: Session, incident_id: int, author: User, body: str, visibility: CommentVisibility) -> IncidentComment:
+    """Adds a comment whose body has already passed clean_comment_body. Does not commit.
+    The author always comes from the session; the incident row itself is not modified."""
+    comment = IncidentComment(incident_id=incident_id, author_id=author.id, visibility=visibility, body=body)
+    db.add(comment)
+    db.flush()
+    return comment
+
+
 @router.post("", response_model=CommentRead, status_code=status.HTTP_201_CREATED)
 def create_comment(incident_id: int, payload: CommentCreate, user: CurrentUser, db: DbSession):
     incident = _get_visible(db, incident_id, user)  # visibility first: 404 before any 403
     if user.role == UserRole.REPORTER and payload.visibility != CommentVisibility.PUBLIC:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=REPORTER_INTERNAL_FORBIDDEN)
-    # Author always comes from the session; the incident row itself is not modified.
-    comment = IncidentComment(incident_id=incident.id, author_id=user.id, visibility=payload.visibility, body=payload.body)
-    db.add(comment)
+    comment = add_comment(db, incident.id, user, payload.body, payload.visibility)
     db.commit()
     db.refresh(comment)
     return comment

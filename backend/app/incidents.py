@@ -145,6 +145,22 @@ def _apply_changes(incident: Incident, changes: dict) -> None:
         setattr(incident, field, value)
 
 
+def apply_incident_changes(db: Session, incident: Incident, user: User, changes: dict) -> IncidentEvent | None:
+    """The one audited update path: applies `changes` to an incident the caller has locked
+    (`_get_visible(..., for_update=True)`), records one audit event with `user` as the actor and
+    updates the stored SLA cycles. Does not commit. Returns None (and changes nothing) when no
+    audited value differs. Used by PATCH /incidents/{id} and by accepting a triage suggestion."""
+    before = audit.snapshot(incident)
+    _apply_changes(incident, changes)
+    diff = audit.diff(before, audit.snapshot(incident))
+    if not diff:
+        return None
+    action = audit.classify(diff)
+    event = audit.record_incident_event(db, incident, user, action, diff)
+    _record_sla(db, incident, action, diff)
+    return event
+
+
 @router.patch("/{incident_id}", response_model=IncidentRead)
 def update_incident(incident_id: int, payload: IncidentUpdate, user: CurrentUser, db: DbSession):
     incident = _get_visible(db, incident_id, user, for_update=True)
@@ -156,16 +172,10 @@ def update_incident(incident_id: int, payload: IncidentUpdate, user: CurrentUser
     if changes.get("assignee_id") is not None:
         _check_assignee(db, changes["assignee_id"])
 
-    before = audit.snapshot(incident)
-    _apply_changes(incident, changes)
-    diff = audit.diff(before, audit.snapshot(incident))
-    if not diff:
+    if apply_incident_changes(db, incident, user, changes) is None:
         # Nothing actually changed: no row update and no audit event.
         db.rollback()
         return _get_visible(db, incident_id, user)
-    action = audit.classify(diff)
-    audit.record_incident_event(db, incident, user, action, diff)
-    _record_sla(db, incident, action, diff)
     db.commit()  # incident change and its audit event commit (or roll back) together
     db.refresh(incident)
     return incident
@@ -196,8 +206,19 @@ def list_incident_events(
         if isinstance(value, int)
     }
     users = db.scalars(select(User).where(User.id.in_(referenced)).order_by(User.id)).all() if referenced else []
+    items = [IncidentEventRead.model_validate(event) for event in events]
+    if user.role != UserRole.REPORTER and events:
+        # Staff only: mark changes applied from an AI triage suggestion (Milestone 5C).
+        from .models import TriageDecision
+
+        applied = dict(db.execute(
+            select(TriageDecision.resulting_event_id, TriageDecision.suggestion_id)
+            .where(TriageDecision.resulting_event_id.in_([e.id for e in events]))
+        ).all())
+        for item in items:
+            item.triage_suggestion_id = applied.get(item.id)
     return IncidentEventPage(
-        items=[IncidentEventRead.model_validate(event) for event in events],
+        items=items,
         total=total or 0,
         limit=limit,
         offset=offset,

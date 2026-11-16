@@ -87,6 +87,23 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await expectNoBlockingViolations(page, 'SLA policy review');
     });
 
+    test('triage panel with a suggestion, the review form and a decision', async ({ page, makeUser }) => {
+      await signIn(page, await makeUser('responder'));
+      const id = await createIncident(page, { title: 'Accessibility triage phishing credential', severity: 'medium' });
+      await page.goto(`/incidents/${id}`);
+      const region = page.getByRole('region', { name: 'Triage assistant' });
+      await region.getByRole('button', { name: 'Suggest triage' }).click();
+      await expect(region.getByRole('button', { name: 'Accept and apply' })).toBeVisible();
+      await region.getByText('What is sent').click();
+      await region.getByLabel(/Add the rationale and next steps as an internal note/).check();
+      await expectNoBlockingViolations(page, 'triage review form');
+      await region.getByRole('button', { name: 'Reject' }).click();
+      await expect(region.getByText('Rejected', { exact: true })).toBeVisible();
+      await region.getByRole('button', { name: 'Suggest triage' }).click(); // cooldown: shows the rate-limit message
+      await expect(region.getByText(/A suggestion was just requested/)).toBeVisible();
+      await expectNoBlockingViolations(page, 'triage decision and rate-limit message');
+    });
+
     test('dashboard, users and account pages', async ({ page }) => {
       await signIn(page, bootstrapAdmin());
       await page.goto('/dashboard');
@@ -113,6 +130,13 @@ test.describe('Phone width (390 px)', () => {
     const pages: [string, () => Promise<void>][] = [
       ['/', () => expect(page.getByRole('button', { name: /Export CSV/ })).toBeVisible()],
       [`/incidents/${id}`, () => expect(page.getByRole('region', { name: 'Discussion' }).getByText('Not visible to the reporter')).toBeVisible()],
+      [`/incidents/${id}?triage`, async () => {
+        // A suggestion with the review form open, including long model text that must wrap.
+        const region = page.getByRole('region', { name: 'Triage assistant' });
+        await region.getByRole('button', { name: 'Suggest triage' }).click();
+        await region.getByLabel(/Add the rationale and next steps as an internal note/).check();
+        await expect(region.getByLabel('Internal note', { exact: true })).toBeVisible();
+      }],
       ['/incidents/new', () => expect(page.getByLabel('Title')).toBeVisible()],
       ['/dashboard', () => expect(page.locator('.stat-tile').first()).toBeVisible()],
       ['/?sla=overdue', () => expect(page.getByRole('link', { name: 'E2E SLA response overdue' })).toBeVisible()],

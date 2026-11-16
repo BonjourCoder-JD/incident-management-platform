@@ -16,6 +16,10 @@ import type {
   IncidentPage,
   IncidentUpdate,
   SessionInfo,
+  TriageDecisionCreate,
+  TriageStatus,
+  TriageSuggestion,
+  TriageSuggestionPage,
   User,
   UserCreate,
   UserSummary,
@@ -231,6 +235,25 @@ export function listSlaPolicyVersions(signal?: AbortSignal): Promise<SlaPolicy[]
 
 export function createSlaPolicyVersion(payload: SlaPolicyCreate): Promise<SlaPolicy> {
   return request<SlaPolicy>('/sla/policy/versions', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+// ---- AI-assisted triage -------------------------------------------------------------------
+
+export function getTriageStatus(signal?: AbortSignal): Promise<TriageStatus> {
+  return request<TriageStatus>('/triage/status', { signal });
+}
+
+export function listTriageSuggestions(incidentId: number, signal?: AbortSignal): Promise<TriageSuggestionPage> {
+  return request<TriageSuggestionPage>(`/incidents/${incidentId}/triage-suggestions`, { signal });
+}
+
+/** Asks for a suggestion. Never changes the incident; a person must accept it first. */
+export function requestTriageSuggestion(incidentId: number): Promise<TriageSuggestion> {
+  return request<TriageSuggestion>(`/incidents/${incidentId}/triage-suggestions`, { method: 'POST' });
+}
+
+export function decideTriageSuggestion(suggestionId: number, payload: TriageDecisionCreate): Promise<TriageSuggestion> {
+  return request<TriageSuggestion>(`/triage-suggestions/${suggestionId}/decision`, { method: 'POST', body: JSON.stringify(payload) });
 }
 
 export function getAnalyticsSummary(params: AnalyticsParams, signal?: AbortSignal): Promise<AnalyticsSummary> {

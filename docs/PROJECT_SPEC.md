@@ -191,6 +191,23 @@ Approved decisions D1–D14 (2026-11-15) with refinements 1–10, and the perfor
 | Visibility (D14) | Every SLA query is restricted with `_visible_to`; `GET /incidents/{id}/sla` uses `_get_visible` (same 404). Escalation details, the escalated flag and the escalated filter are staff-only. Reporters see their own incidents' targets and states. Nothing in the SLA code reads comments. | Canary tests prove internal notes never appear in SLA responses, lists, dashboards or exports. |
 | Export (D14) | Four columns: `response_due_utc`, `response_state` (first cycle), `resolution_due_utc`, `resolution_state` (current cycle). | The list's SLA filter does not apply to the export (ISSUE-20). |
 
+### AI triage design (Milestone 5C)
+
+Approved plan with decision T1 (cheapest current Haiku, no automatic upgrade) and the implementation conditions of 2026-11-15.
+
+| Topic | Decision | Notes and limits |
+|---|---|---|
+| Scope | Responders and admins can request a suggestion: severity (existing enum), a rationale (1–600 characters), up to five next steps (1–200 characters each) and possible duplicates chosen from up to five candidates. | Reporters get 403 on every triage endpoint and never see a suggestion, decision or history marker. |
+| Human review | A suggestion never changes the incident. Accepting applies the chosen (optionally edited) severity through `incidents.apply_incident_changes`, the same audited path as `PATCH /incidents/{id}`, with the deciding person as actor; an optional internal note is added through the comment service. Rejecting changes nothing. One decision per suggestion. | A suggestion is **stale** once any audit event follows the one it was based on (`basis_event_id`); stale suggestions cannot be accepted (409), only rejected. |
+| Providers | `off` (default), `fake` (deterministic keyword rules, offline, labelled "Test provider (not AI)") and `anthropic` (official SDK `anthropic` 2.8, model `claude-haiku-5-5` by default). The model is configurable (`TRIAGE_MODEL`); any model other than the default also needs explicit prices, otherwise triage stays off. There is no fallback to another model. | Haiku 5.5 was verified on 2026-11-15: $0.10 / $0.50 per million input / output tokens, structured outputs supported, retirement not before 2027-10-07. |
+| Request | One Messages call: system prompt (`triage-v1`), one user message holding the incident as JSON marked untrusted, a strict JSON schema (`output_config.format`), effort `low`, thinking off, no tools, `max_tokens` 1,200, timeout 20 s, one SDK retry. | The schema has no length keywords (the API does not accept them); lengths and counts are enforced by the validator. |
+| Data sent | Title, description, severity, status, and up to five other incident titles the requester can see (PostgreSQL full-text search over title and description: the stored generated column `incidents.search_vector`, index `ix_incidents_search`). Never comments, internal notes, people, email addresses or SLA data. | **Synthetic data only** until a production retention and redaction policy exists (ISSUE-23). |
+| Validation | Strict, never repaired: exactly the four keys; severity from the enum; text trimmed and whitespace collapsed, within limits, no control characters, URLs, web or email addresses; duplicate ids unique integers from the candidates sent. Anything else is stored as `invalid_output` with a category only. | Raw model output is never stored or logged. |
+| Budgets | Worst-case reservation per call (one token per UTF-8 byte of input plus 400, plus the full output allowance), in micro-dollars. Spent = actual cost of finished calls plus the full reservation of unfinished ones. Limits: cooldown 60 s per incident, 10 requests per user per hour, $0.01 per incident, $0.05 per user per day, 300 requests and $0.50 per day overall, $5.00 per month overall; 429 with `Retry-After`. | Calls whose billing is unknown (timeouts, lost connections, unreported usage) or that returned no usage are charged their full reservation. |
+| Concurrency | Reservation: one short transaction under advisory lock `51_000_003` that closes stale reservations, checks every limit and inserts the request, then commits. The provider is called with **no transaction open and no row lock**. The result is recorded in a second short transaction. A decision locks the incident row briefly (no provider call). | Reservations without a result after 600 s are closed as `abandoned` at full cost; a late result keeps the abandoned record. Budgets can only be over-counted. |
+| Audit and storage | Append-only `triage_requests` (who, when, provider, model, prompt version, input SHA-256, candidates, basis event, reservation), `triage_suggestions` (outcome, validated fields, tokens, cost, latency) and `triage_decisions` (who, decision, applied severity, resulting audit event, note, reason). Staff history shows "Applied from triage suggestion #N after review". | Logs contain identifiers, outcome, tokens and cost only. |
+| Interface | Staff-only "Triage assistant" card on the detail page: source label in text ("AI-generated suggestion" or "Test suggestion (not AI)"), model and prompt version, a "What is sent" disclosure, remaining allowance, plain-text rendering of all model output, editable severity, optional editable internal note with the comment rules, reject with reason, focus moved to the result and to the decision. | — |
+
 ### Data model
 
 **`users`** (migration `0002`)
@@ -255,6 +272,14 @@ Indexes `ix_incident_comments_incident_id_visibility_id (incident_id, visibility
 
 **`incident_escalations`** (migration `0007`): `id`, `incident_id` (FK `RESTRICT`), `cycle`, `target` (enum `sla_target`), `deadline_at`, `policy_version_id` (FK), `triggered_by` (always `system`), `created_at`; unique (`incident_id`, `cycle`, `target`); a response escalation only in cycle 0. Append-only.
 
+**`triage_requests`** (migration `0008`): `id`, `incident_id` (FK `RESTRICT`), `requested_by` (FK → `users`, `RESTRICT`), `provider`, `model`, `prompt_version`, `basis_event_id` (FK → `incident_events`, nullable), `input_sha256`, `candidate_ids` (JSONB), `reserved_microusd` (≥ 0), `created_at`. Indexes on (`requested_by`, `created_at`), (`incident_id`, `created_at`) and `created_at`. Append-only.
+
+**`triage_suggestions`** (migration `0008`): `id`, `request_id` (unique FK), `outcome` (enum `triage_outcome`: `valid`, `invalid_output`, `refused`, `timeout`, `provider_error`, `abandoned`), `error_category`, `severity`, `rationale` (1–600), `next_steps` and `duplicate_ids` (JSONB), `input_tokens`, `output_tokens`, `cost_microusd` (≥ 0), `latency_ms`, `created_at`. A check requires the suggestion fields exactly when the outcome is `valid`. Append-only.
+
+**`triage_decisions`** (migration `0008`): `id`, `suggestion_id` (unique FK), `decided_by` (FK → `users`), `decision` (enum `triage_decision_kind`: `accepted`, `accepted_with_edits`, `rejected`), `applied_severity`, `resulting_event_id` (unique FK → `incident_events`), `note_comment_id` (unique FK → `incident_comments`), `reason` (1–500), `created_at`. A check keeps a rejection free of applied changes. Append-only.
+
+**`incidents.search_vector`** (migration `0008`): a stored generated column, `to_tsvector('english', title || ' ' || description)`, computed by PostgreSQL on every insert and update (it cannot be written directly), with the GIN index `ix_incidents_search`. Deferred in the ORM, so incident queries do not load it, and never part of an API response or export. Adding it rewrites `incidents` once (5.3 s at 52,000 rows).
+
 Indexes: `ix_incident_events_incident_id_id (incident_id, id)`, `ix_incident_events_actor_id`, and the partial `ix_incident_events_first_resolution (incident_id, created_at) WHERE status moved to resolved/closed` (migration `0004`).
 
 **Legacy data strategy (migration `0002`).** Every existing incident is preserved. Incidents created before accounts existed keep `reporter_id = NULL` and are visible to responders and admins only. Existing `assignee_id` values are set to `NULL`, because no users existed before this migration, so they could not refer to anyone; this step is not reversed by a downgrade. The downgrade otherwise removes the users and sessions tables, the ownership column, both foreign keys and the `user_role` type.
@@ -284,6 +309,10 @@ All `/incidents` and `/users` endpoints require a session (**401** otherwise). S
 | `POST` | `/sla/policy/versions` | Admin | `{reason, targets: [4 × {severity, response_minutes, resolution_minutes}]}` (strict integers); 201. Applies to cycles that start afterwards. |
 | `GET` | `/exports/incidents.csv` | Any role (visibility applies) | Optional `severity`, `status`. Streams the CSV described in *CSV export design*. 413 above `EXPORT_MAX_ROWS` (default 10,000) with `X-Export-Row-Count`; 422 for invalid filters. Each request is recorded in `incident_exports`. Read-only (405 for writes). |
 | `GET` | `/analytics/summary` | Any role (visibility applies) | `from`, `to` (inclusive dates), `tz` (IANA). Returns `{scope, range, totals, by_status, by_severity, open_backlog_by_severity, trend, resolution}`; see *Analytics design*. 422 for invalid ranges or time zones. Read-only (405 for writes). |
+| `GET` | `/triage/status` | Responder, admin | `{enabled, reason, provider, provider_label, is_ai, model, prompt_version, sent_fields, typical_cost_usd, limits}`. |
+| `POST` | `/incidents/{id}/triage-suggestions` | Responder, admin | Request a suggestion; 201 with it (any outcome). Never changes the incident. 404 like the incident; 503 when off; 429 with `Retry-After` at any limit. |
+| `GET` | `/incidents/{id}/triage-suggestions` | Responder, admin | Newest 20, each with `outcome`, `message`, validated fields, `duplicates`, `candidates_sent`, provider, model, prompt version, requester, cost, `stale` and `decision`. |
+| `POST` | `/triage-suggestions/{id}/decision` | Responder, admin | `{decision: accept\|reject, severity?, add_internal_note?, note?, reason?}` (unknown fields 422). Accept applies the severity through the audited update; 409 when stale, not valid, or already decided; 422 for an invalid note. |
 | `GET` | `/users/assignees` | Responder, admin | Active responders and admins as `{id, email}` |
 | `GET` | `/users` | Admin | All accounts |
 | `POST` | `/users` | Admin | Create `{email, password, role}`. 409 on duplicate email. |
@@ -294,6 +323,64 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 ---
 
 ## Completed functionality
+
+### Milestone 5C — AI-assisted incident triage
+
+**Not yet released.** Implemented locally on 2026-11-15; every item below is **Verified (local)** until the feature commit passes CI. No paid API call has been made: every automated check uses the deterministic fake provider or a stand-in SDK client.
+
+Design: *AI triage design*; data model: `triage_requests`, `triage_suggestions`, `triage_decisions`, `incidents.search_vector`.
+
+| Functionality | Status | Evidence |
+|---|---|---|
+| Off by default; unknown provider names are off; the real provider needs a key and known prices (fails closed for other models); constructed with timeout 20 s and one retry; never called in tests | **Verified (local)** | `backend/tests/test_triage.py` |
+| Requests are minimal and strict: no tools or sampling parameters, strict JSON schema, effort low, thinking off; refusals, truncation, non-JSON, missing usage, timeouts, connection errors, 429 and 5xx are mapped; one call on the configured model, no fallback | **Verified (local)** | `test_triage.py` (stand-in SDK client, no network) |
+| Strict output validation: 29 malformed and adversarial shapes rejected (keys, severity, lengths, control characters, URLs, web and email addresses, duplicate ids not sent or not integers); unusable results recorded with a category and a plain message; no raw output stored or logged | **Verified (local)** | `test_triage.py` |
+| Prompt-injection defences: incident text sent as one JSON value marked untrusted, separate from the instructions; canaries never reach logs or responses | **Verified (local)** | `test_triage.py`, `test_triage_eval.py` |
+| Data minimisation: four incident fields and up to five visible candidate titles; never comments, internal notes, people or SLA data (canary test); candidates restricted to the requester's visibility | **Verified (local)** | `test_triage.py` |
+| Human review: requesting never changes the incident; accept, accept with edits, internal note (comment rules apply, invalid note changes nothing), reject with reason, accepting the current severity records no change; one decision per suggestion; stale suggestions refused (409) | **Verified (local)** | `test_triage.py`, `e2e/tests/triage.spec.ts` |
+| Audit and SLA: the accepted change is an ordinary audit event with the deciding person as actor (not the requester); SLA targets follow through the shared update path and the stored read model stays consistent; the history marker is staff-only | **Verified (local)** | `test_triage.py`, `triage.spec.ts` |
+| Access: reporters get 403 on every triage endpoint and see no panel, marker or note; CSRF on both state-changing routes (route inventory); 404 for missing incidents and suggestions | **Verified (local)** | `test_triage.py`, `test_auth.py`, `triage.spec.ts` |
+| Cost controls: costs in micro-dollars rounded up; worst-case reservation is an upper bound; actual cost recorded; unknown billing charged in full; every limit (cooldown, hourly, per incident, per user per day, global daily count and spend, monthly spend) stops requests before the provider is called, with `Retry-After` | **Verified (local)** | `test_triage.py` |
+| Concurrency and crashes: no transaction, row lock or budget lock is held while the provider runs (checked from another connection); reservations are serialised by the advisory lock; simultaneous requests cannot overspend; an in-flight reservation counts at full cost; crashed reservations are closed as abandoned at full cost after 600 s and a late result keeps that record | **Verified (local)** | `test_triage.py` (real transactions) |
+| Append-only triage tables (UPDATE, DELETE, TRUNCATE refused) and consistency checks on suggestions and decisions | **Verified (local)** | `test_triage.py`; migration check below |
+| Triage panel: source labelled in text, the fake never presented as AI, "What is sent" disclosure, allowance, plain-text rendering of model output, editable severity and note with counter and validation, reject with reason, stale and rate-limit messages, focus to the result and to the decision, earlier suggestions collapsed | **Verified (local)** | `frontend/src/components/TriagePanel.test.tsx` (17 tests) |
+| End to end with the fake provider: review, edit and accept with audit, note and reporter view; reject; stale; cooldown message; CSRF | **Verified (local)** | `e2e/tests/triage.spec.ts` (5 tests) |
+| Accessibility: axe scans of the review form, decision and rate-limit message in both themes; 390 px layout with the review form open | **Verified (local)** | `e2e/tests/accessibility.spec.ts` (2 new tests, phone test extended) |
+| Evaluation harness and synthetic dataset; paid runs refused without `--confirm-spend` and a sufficient `--max-usd` | **Verified (local)** | `backend/tests/test_triage_eval.py`, `backend/eval/triage_cases.jsonl` |
+| Migration `0008` upgrade, downgrade, re-upgrade with data; `alembic check` | **Verified (local)** | see *Migration* below |
+| Stored search vector: generated, GIN-indexed, follows title and description changes on create and update, matches description words, never in API responses or exports | **Verified (local)** | `test_triage.py`; migration check below |
+| Duplicate-candidate search under 100 ms on the benchmark dataset (after the approved stored-vector change) | **Verified (local)** | see *Benchmark* below |
+| The API key never appears in triage responses or logs (canary key), nor in built frontend assets (built with a canary key in the environment); the frontend reads no environment variables | **Verified (local)** | `test_triage.py`; asset scan |
+
+**Results (local, 2026-11-15):** backend **509 passed** (392 before; 117 new) in the CI-equivalent sequence; frontend **158 passed** (141 before; 17 new), type check and production build clean; end to end **61 tests** (54 before; 7 new): **three consecutive runs, 61/61 each**, on freshly built disposable stacks (2.2–2.3 min of test time), repeated after the stored-vector change, with `sla-verify` consistent before (6 cycles) and after (73 cycles) each run. The Docker volume list was identical before and after. An earlier full run failed on two new accessibility checks, both fixed before the recorded runs: a test locator that matched two labels, and an existing contrast defect found by the new scan (below).
+
+**Evaluation (fake provider, deterministic; checks the pipeline, not quality):** 45 cases; schema-valid 100%; exact severity 71.1%; within one level 88.9%; injection-resistant 91.7% (11 of 12: the Spanish-language case has no English keyword, so the keyword rules say "low" for a "critical" label; no canary or injected text appeared in any output); duplicate precision 88.9%, recall 100%. Against the thresholds for a real model (98 / 70 / 95 / 100 / 80%), the fake fails within-one and injection resistance, as expected of keyword rules. **The real model has not been evaluated**: a run needs separate approval (worst case $0.035 per run, $0.105 for three runs on Haiku 5.5).
+
+**Benchmark (52,000 incidents, 40,000 triage requests this month; PostgreSQL 17, default settings; medians of 7 after 2 warm-ups):** varied titles from a 70-word security vocabulary, plus 2,000 identical titles as a duplicate-heavy case. The first design (an expression index, ranking recomputed per row) missed the target; Option A, a stored generated `tsvector` column, was approved on 2026-11-15 and implemented in `0008`.
+
+| Request | First design | Stored vector (released design) | Target |
+|---|---|---|---|
+| Duplicate candidates, staff, 10 titles | 180–394 ms | **27–86 ms** (slowest single sample 97 ms) | < 100 ms |
+| Duplicate-heavy title (2,000 identical) / largest reporter (5,529 incidents) | 188 / 28 ms | **31 / 7 ms** | < 100 ms |
+| Budget checks (`check_limits`) over 40,000 requests | 26 ms | 28 ms | — |
+| `POST /incidents/{id}/triage-suggestions` with the fake provider | 234 ms | **99 ms** | — |
+| `GET /incidents/{id}/triage-suggestions` / `GET /triage/status` | 16 / 11 ms | 16 / 13 ms | — |
+
+Query plans (`EXPLAIN ANALYZE` of the exact query, 12 staff and 3 reporter titles): a selective query (2 matching incidents) uses a bitmap scan of `ix_incidents_search` (3.4 ms); the broad queries in this dense dataset match 15,000–21,000 of 52,000 incidents (29–41%), where the planner reads the stored vectors sequentially (25–37 ms; forcing the index gives 14–35 ms, both well within the target); reporter queries start from `ix_incidents_reporter_id` (about 4 ms). The benchmark's medians include the application round trip.
+
+**Migration:** upgrade `0001`→`0008`, `alembic check` clean (no exclusions), downgrade to base leaves no tables or enum types, re-upgrade and check clean. With existing data created at `0007` (an audited incident, a legacy incident, an audit event and an internal note): a fingerprint (MD5 over every incident, event and comment field) was **identical** before and after upgrading to `0008`, and both incidents received a correct search vector. After upgrading: a title update recomputed the vector, a direct write to it was refused by PostgreSQL, and the triggers refused UPDATE on triage rows. Downgrading to `0007` removed the column, the index and every triage table, enum and function with the fingerprint unchanged; re-upgrading recomputed every vector (2 of 2 correct) with the fingerprint still unchanged. **Downgrading `0008` deletes triage records.**
+
+**Deliberate-break checks** (scratch copies; each disabled one protection): backend 21 variants — severity enum unchecked, unknown duplicates allowed, links allowed, staleness skipped, suggestion applied automatically, requester as actor, comments sent to the model, candidates without visibility, reporters allowed, history marker for reporters, cooldown skipped, unresolved reservations free, budget lock removed, transaction held during the call, unknown billing free, abandoned reservations free, fallback to a more expensive model, real provider on by default, raw output logged, plus the explicit existing-decision check removed: **20 caught**. The survivor is equivalent by design (the unique constraint still refuses a second decision, and that path is tested). The budget-lock variant first survived; a deterministic lock test was added before the final runs. Frontend 7 variants — model text as HTML, test provider labelled AI, panel for reporters, stale suggestion acceptable, accepted without review, incident not reloaded, history marker missing: **7 caught** (one needed a new explicit assertion). End to end 2 variants — reporters allowed, staleness skipped: **2 caught**. Search vector 1 variant — title only, in model and migration: **caught** by 3 tests.
+
+**Deviations from the approved plan, recorded:**
+- **SDK version:** `anthropic` 2.8 (current) instead of the 1.x assumed in the plan; it depends on `httpx2`, separate from the `httpx` used by the tests.
+- **Existing tests changed:** the TRUNCATE assertions in `test_audit.py` and `test_comments.py` now also accept PostgreSQL's foreign-key refusal, which fires before the append-only trigger now that triage tables reference events and comments. The CSRF route inventory in `test_auth.py` lists the two new routes.
+- **Search storage (approved 2026-11-15, Option A):** the planned expression index was replaced by a stored generated column `incidents.search_vector` with a GIN index, because the first design missed the < 100 ms target. `alembic check` needs no exclusions.
+- **Shared code paths:** `incidents.apply_incident_changes` and `comments.add_comment` were extracted from the existing endpoints so accepting a suggestion uses exactly the same audited and SLA-tracked code; endpoint behaviour is unchanged (full suites pass).
+- **Contrast fix outside triage:** the light-theme Medium severity badge was 3.9:1 on the page background (WCAG AA needs 4.5:1); it was never scanned before because earlier accessibility tests used High incidents. `--sev-medium` is now `#854d0e` (5.3:1).
+- **Compose:** `compose.yaml` passes `TRIAGE_PROVIDER` (default `off`) and `ANTHROPIC_API_KEY` to the backend; the end-to-end override forces `fake` and an empty key. `.env.example` documents both (commented). The backend image now includes `eval/`.
+
+**Security review of changed files:** no credentials or real data (synthetic `example.com` users, canary strings, a placeholder test key string that is never sent); no generated artifacts. New dependency `anthropic` 2.8: `pip-audit` no known vulnerabilities; `npm audit` 0 for `frontend` and `e2e` (unchanged); the workflow is unchanged; backend and frontend images build.
 
 ### Milestone 5B — SLA tracking and escalation
 
@@ -594,6 +681,12 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 | ISSUE-20 | The CSV export ignores the list's SLA filter (it applies only severity and status); the export button's accessible name states its scope. | Exports from an SLA-filtered list contain more rows than shown. | Future: pass `sla` to the export with the same conditions and tests. |
 | ISSUE-21 | Escalations are in-app only (badge, staff filter, dashboard count); nobody is notified by email or webhook. | Staff must look at the application to notice an escalation. | Milestone 6 (D12): notifications through a configured channel, without incident text in the message. |
 | ISSUE-22 | The stored SLA read model is maintained by the application; a direct SQL change to incidents or events would bypass it. | Stored SLA figures could drift from the audit trail. | `python -m app.cli sla-verify` detects any difference; Milestone 6: run it on a schedule with alerting, and the least-privilege role (ISSUE-12) prevents direct changes. |
+| ISSUE-23 | AI triage has no retention or redaction policy: with the real provider, incident text is sent to a third party, and stored suggestions are append-only. | **Production-readiness blocker for real data.** Synthetic data only. | Milestone 6: data-processing review, retention period, redaction (with ISSUE-18) and a documented provider data policy before any real data. |
+| ISSUE-24 | The real provider has never been called: its behaviour is covered only by a stand-in SDK client, and the Haiku evaluation has not been run. | Real-model quality, latency and token counts are unknown. | Run `python -m app.triage_eval --provider anthropic` after separate approval of the spend (worst case $0.105 for three runs). |
+| ~~ISSUE-25~~ | ~~Duplicate-candidate search took 180–394 ms for staff on the 52,000-incident benchmark.~~ | — | **Resolved before release** with the stored generated search vector (27–86 ms). |
+| ISSUE-26 | Candidate search and the fake provider are English-only (English text-search configuration and keywords). | Non-English reports get fewer candidates and keyword-based test suggestions. | Evaluate the real model on the mixed-language cases; consider the `simple` configuration. |
+| ISSUE-27 | Recorded costs are estimates (reported tokens × configured prices), not billing data; calls with unknown billing, including rate-limited ones, are charged their full reservation. | Budgets over-count, never under-count. | Reconcile with provider billing in Milestone 6 if needed. |
+| ISSUE-28 | Triage settings are read at start-up, and the budget lock serialises all reservations across the application. | Changing limits needs a restart; reservation throughput is bounded (one short transaction at a time). | Acceptable at demonstration scale; revisit with shared rate limiting (ISSUE-7). |
 
 ---
 
@@ -708,11 +801,13 @@ Implemented as described in *SLA design* (approved D1–D14, refinements 1–10 
 - [x] Visibility rules apply to every SLA figure, filter and export (cross-reporter tests). *(CI run 43766899182 passed.)*
 - [x] Unit, API, end-to-end and deliberate-break tests; performance checked on the benchmark dataset. *(CI run 43766899182 passed.)*
 
-### Milestone 5C — AI-assisted incident triage with human approval · Planned
+### Milestone 5C — AI-assisted incident triage with human approval · Implemented locally, awaiting review (not released)
 
 Suggested severity and triage notes for new incidents, which a responder reviews before anything changes.
 
-**Anticipated technical additions (not implemented)**
+Implemented as described in *AI triage design*; evidence under *Completed functionality* (Verified (local)). The original anticipated additions, kept for reference:
+
+**Anticipated technical additions (as planned)**
 - A triage service that sends incident text to a language model and requests **structured output** validated against a strict schema (for example suggested severity from the existing enum, a short rationale, suggested next steps, possible duplicate incident IDs from the caller's visible set).
 - Suggestions stored separately from the incident, with model identifier, prompt version, timestamps and validation result; nothing is applied automatically.
 - A staff-only review panel: accept (applying changes through the normal, audited update path with the human as actor), edit, or reject.

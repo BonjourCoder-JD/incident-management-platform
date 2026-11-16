@@ -200,6 +200,9 @@ export function IncidentHistory({ incidentId, refreshKey }: { incidentId: number
                 <div className="timeline-body">
                   <p className="timeline-actor"><Email value={event.actor.email} /></p>
                   <Summary event={event} people={state.people} />
+                  {event.triage_suggestion_id != null && (
+                    <p className="muted small timeline-triage">Applied from triage suggestion #{event.triage_suggestion_id} after review</p>
+                  )}
                 </div>
                 <time className="timeline-time muted small" dateTime={event.created_at}>{formatDateTime(event.created_at)}</time>
               </li>

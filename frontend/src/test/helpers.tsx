@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react';
 import { vi } from 'vitest';
 import App from '../App';
-import type { CommentPage, Incident, IncidentEventPage, IncidentSla, User, UserRole, UserSummary } from '../api/types';
+import type { CommentPage, Incident, IncidentEventPage, IncidentSla, TriageStatus, User, UserRole, UserSummary } from '../api/types';
 
 export const TEST_CSRF = 'test-csrf-token';
 
@@ -63,11 +63,26 @@ interface MockOptions {
   comments?: CommentPage | Handler;
   /** SLA responses (`/incidents/{id}/sla`). Defaults to not tracked. */
   sla?: IncidentSla | Handler;
+  /** Triage requests (`/triage/...`, `/incidents/{id}/triage-suggestions`, `/triage-suggestions/...`). Defaults to triage turned off. */
+  triage?: Handler;
 }
 
 const EVENTS_PATH = /^\/api\/incidents\/\d+\/events$/;
 const COMMENTS_PATH = /^\/api\/incidents\/\d+\/comments$/;
 const SLA_PATH = /^\/api\/incidents\/\d+\/sla$/;
+const TRIAGE_PATH = /^\/api\/(triage\/status|incidents\/\d+\/triage-suggestions|triage-suggestions\/\d+\/decision)$/;
+
+/** Triage turned off: the default for tests that are not about triage. */
+export const TRIAGE_OFF: TriageStatus = {
+  enabled: false, reason: 'AI triage is turned off.', provider: 'off', provider_label: null, is_ai: false, model: null,
+  prompt_version: 'triage-v1', sent_fields: [], typical_cost_usd: null, limits: null,
+};
+
+function triageOff(url: URL): Response {
+  if (url.pathname === '/api/triage/status') return jsonResponse(200, TRIAGE_OFF);
+  if (url.pathname.endsWith('/triage-suggestions')) return jsonResponse(200, { items: [] });
+  return jsonResponse(500, {});
+}
 
 /**
  * Replaces global fetch. Health, session (`/auth/me`), logout and the assignee directory
@@ -89,6 +104,7 @@ export function mockApi(handler: Handler = () => jsonResponse(500, {}), options:
       const sla = options.sla ?? UNTRACKED_SLA;
       return typeof sla === 'function' ? sla(url, init) : jsonResponse(200, sla);
     }
+    if (TRIAGE_PATH.test(url.pathname)) return (options.triage ?? triageOff)(url, init);
     if (COMMENTS_PATH.test(url.pathname)) {
       const comments = options.comments ?? EMPTY_COMMENTS;
       if (typeof comments === 'function') return comments(url, init);
@@ -102,11 +118,11 @@ export function mockApi(handler: Handler = () => jsonResponse(500, {}), options:
 
 const PLUMBING = new Set(['/api/health', '/api/auth/me', '/api/users/assignees']);
 
-/** Calls made to the API, excluding health, session, assignee-directory, history, discussion and SLA requests. */
+/** Calls made to the API, excluding health, session, assignee-directory, history, discussion, SLA and triage requests. */
 export function apiCalls(fetchMock: ReturnType<typeof mockApi>) {
   return fetchMock.mock.calls
     .map(([input, init]) => ({ url: new URL(String(input), 'http://localhost'), init: (init ?? {}) as RequestInit }))
-    .filter(call => !PLUMBING.has(call.url.pathname) && !EVENTS_PATH.test(call.url.pathname) && !COMMENTS_PATH.test(call.url.pathname) && !SLA_PATH.test(call.url.pathname));
+    .filter(call => !PLUMBING.has(call.url.pathname) && !EVENTS_PATH.test(call.url.pathname) && !COMMENTS_PATH.test(call.url.pathname) && !SLA_PATH.test(call.url.pathname) && !TRIAGE_PATH.test(call.url.pathname));
 }
 
 /** Requests made to the SLA endpoint. */
@@ -121,6 +137,13 @@ export function commentCalls(fetchMock: ReturnType<typeof mockApi>) {
   return fetchMock.mock.calls
     .map(([input, init]) => ({ url: new URL(String(input), 'http://localhost'), init: (init ?? {}) as RequestInit }))
     .filter(call => COMMENTS_PATH.test(call.url.pathname));
+}
+
+/** Requests made to the triage endpoints. */
+export function triageCalls(fetchMock: ReturnType<typeof mockApi>) {
+  return fetchMock.mock.calls
+    .map(([input, init]) => ({ url: new URL(String(input), 'http://localhost'), init: (init ?? {}) as RequestInit }))
+    .filter(call => TRIAGE_PATH.test(call.url.pathname));
 }
 
 /** Requests made to the incident history endpoint. */

@@ -6,6 +6,7 @@ import { IncidentFields } from '../components/IncidentFields';
 import { IncidentDiscussion } from '../components/IncidentDiscussion';
 import { IncidentHistory } from '../components/IncidentHistory';
 import { IncidentSla } from '../components/IncidentSla';
+import { TriagePanel } from '../components/TriagePanel';
 import { useAssignees } from '../components/useAssignees';
 import { Alert, Email, EmptyState, LoadingState, SeverityBadge, StatusBadge } from '../components/ui';
 import { useFlash } from '../flash';
@@ -56,6 +57,7 @@ export function IncidentDetailPage({ id }: { id: number }) {
   const [errors, setErrors] = useState<FieldErrors>({});
   const [saving, setSaving] = useState<'status' | 'details' | null>(null);
   const [historyKey, setHistoryKey] = useState(0);
+  const [discussionKey, setDiscussionKey] = useState(0);
   const assignees = useAssignees(canTriage && editing);
 
   useEffect(() => {
@@ -118,6 +120,15 @@ export function IncidentDetailPage({ id }: { id: number }) {
     } finally {
       setSaving(null);
     }
+  }
+
+  /** After a triage suggestion is accepted: reload the incident, its history and SLA, and the discussion if a note was added. */
+  function handleTriageApplied(noteAdded: boolean) {
+    setHistoryKey(key => key + 1);
+    if (noteAdded) setDiscussionKey(key => key + 1);
+    getIncident(incident.id)
+      .then(updated => setState({ kind: 'ready', incident: updated }))
+      .catch(() => setNotice({ tone: 'error', text: 'The suggestion was applied, but the incident could not be reloaded. Refresh the page.' }));
   }
 
   function changeStatus(status: IncidentStatus) {
@@ -207,7 +218,8 @@ export function IncidentDetailPage({ id }: { id: number }) {
               </>
             )}
           </div>
-          <IncidentDiscussion incident={incident} />
+          {canTriage && <TriagePanel incidentId={incident.id} refreshKey={historyKey} onApplied={handleTriageApplied} />}
+          <IncidentDiscussion incident={incident} refreshKey={discussionKey} />
           <IncidentHistory incidentId={incident.id} refreshKey={historyKey} />
         </div>
 

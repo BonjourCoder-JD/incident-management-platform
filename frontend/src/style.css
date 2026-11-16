@@ -64,7 +64,7 @@
     --meter-track: #cde2fb;
     --grid: #e2e8f0;
     --sev-low: #1d4ed8;
-    --sev-medium: #a16207;
+    --sev-medium: #854d0e; /* 5.3:1 on the badge tint over the page background (was #a16207, 3.9:1) */
     --sev-high: #9a3412; /* 4.5:1+ on the badge tint (was #c2410c, 4.34:1) */
     --sev-critical: #b91c1c;
     --st-open: #1d4ed8;
@@ -420,3 +420,33 @@ input[aria-invalid='true'], select[aria-invalid='true'], textarea[aria-invalid='
 .sla-versions { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
 .sla-versions summary { cursor: pointer; overflow-wrap: anywhere; }
 .sla-reason-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0.4rem 0; }
+
+/* Triage assistant (Milestone 5C). The source is always stated in text ("AI-generated suggestion" or
+   "Test suggestion (not AI)"), never by colour alone; badge tones reuse contrast-checked status tones. */
+.triage { display: grid; gap: 0.8rem; }
+.triage > p { margin: 0; }
+.triage-actions { justify-content: flex-start; margin: 0; }
+.triage-disclosure summary, .triage-earlier summary { cursor: pointer; color: var(--accent); font-size: 0.875rem; }
+.triage-disclosure ul { margin: 0.4rem 0; padding-left: 1.1rem; }
+.triage-disclosure p { margin: 0.25rem 0 0; }
+.triage-suggestion { border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem 0.9rem; display: grid; gap: 0.55rem; min-width: 0; }
+.triage-suggestion > p { margin: 0; }
+.triage-earlier { display: grid; gap: 0.75rem; }
+.triage-earlier[open] > summary { margin-bottom: 0.75rem; }
+.triage-suggestion-heading { margin: 0; font-size: 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.triage-suggestion-heading:focus { outline: none; }
+.triage-suggestion-heading:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.triage-badge-ai { --tone: var(--st-investigating); }
+.triage-badge-test { --tone: var(--text-muted); }
+.triage-severity { display: flex; align-items: center; gap: 0.5rem; }
+.triage-rationale { white-space: pre-wrap; overflow-wrap: anywhere; }
+.triage-subheading { margin: 0.25rem 0 0; font-size: 0.875rem; }
+.triage-steps, .triage-duplicates { margin: 0; padding-left: 1.25rem; display: grid; gap: 0.2rem; overflow-wrap: anywhere; }
+.triage-review { border-top: 1px solid var(--border); padding-top: 0.75rem; gap: 0.75rem; }
+.triage-review-intro { margin: 0; }
+.triage-decision { margin: 0; border-top: 1px solid var(--border); padding-top: 0.6rem; overflow-wrap: anywhere; }
+.triage-decision:focus { outline: none; }
+.triage-decision:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.checkbox-field { display: flex; align-items: flex-start; gap: 0.5rem; cursor: pointer; font-size: 0.9375rem; }
+.checkbox-field input { width: auto; padding: 0; margin-top: 0.3rem; accent-color: var(--accent); }
+.timeline-triage { margin: 0.15rem 0 0; }

@@ -42,8 +42,8 @@ function Comment({ comment, reporterId }: { comment: IncidentComment; reporterId
   );
 }
 
-/** Public comments and, for responders and admins, internal notes. Oldest first. */
-export function IncidentDiscussion({ incident }: { incident: Incident }) {
+/** Public comments and, for responders and admins, internal notes. Oldest first. `refreshKey` reloads it. */
+export function IncidentDiscussion({ incident, refreshKey = 0 }: { incident: Incident; refreshKey?: number }) {
   const user = useCurrentUser();
   const staff = permissions.canTriage(user);
   const defaultVisibility: CommentVisibility = staff ? 'internal' : 'public';
@@ -78,7 +78,7 @@ export function IncidentDiscussion({ incident }: { incident: Incident }) {
         setState({ kind: 'error', message: error instanceof ApiError ? error.message : 'Unable to load the discussion.' });
       });
     return () => controller.abort();
-  }, [incident.id, retryKey]);
+  }, [incident.id, retryKey, refreshKey]);
 
   async function loadMore() {
     if (state.kind !== 'ready') return;

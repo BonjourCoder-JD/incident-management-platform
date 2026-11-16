@@ -188,6 +188,8 @@ export interface IncidentEvent {
   changes: Record<string, FieldChange>;
   actor: UserSummary;
   created_at: string;
+  /** Staff only: the triage suggestion this change was applied from. Always null for reporters. */
+  triage_suggestion_id?: number | null;
 }
 
 export const COMMENT_VISIBILITIES = ['public', 'internal'] as const;
@@ -281,4 +283,84 @@ export function isSeverity(value: unknown): value is Severity {
 
 export function isStatus(value: unknown): value is IncidentStatus {
   return typeof value === 'string' && (STATUSES as readonly string[]).includes(value);
+}
+
+// ---- AI-assisted triage (responders and admins only) ----
+
+export interface TriageLimits {
+  user_daily_usd: number;
+  user_daily_remaining_usd: number;
+  user_hourly_requests: number;
+  user_hourly_remaining: number;
+  incident_cooldown_seconds: number;
+}
+
+export interface TriageStatus {
+  enabled: boolean;
+  /** Why triage is unavailable, when it is. */
+  reason: string | null;
+  provider: 'off' | 'fake' | 'anthropic';
+  provider_label: string | null;
+  /** False for the deterministic test provider, which must never be presented as AI. */
+  is_ai: boolean;
+  model: string | null;
+  prompt_version: string;
+  /** Exactly what the model receives. */
+  sent_fields: string[];
+  typical_cost_usd: number | null;
+  limits: TriageLimits | null;
+}
+
+export const TRIAGE_OUTCOMES = ['valid', 'invalid_output', 'refused', 'timeout', 'provider_error', 'abandoned'] as const;
+export type TriageOutcome = (typeof TRIAGE_OUTCOMES)[number];
+export type TriageDecisionKind = 'accepted' | 'accepted_with_edits' | 'rejected';
+
+export interface TriageCandidate {
+  id: number;
+  title: string;
+}
+
+export interface TriageDecision {
+  decision: TriageDecisionKind;
+  applied_severity: Severity | null;
+  resulting_event_id: number | null;
+  note_comment_id: number | null;
+  reason: string | null;
+  decider: UserSummary;
+  created_at: string;
+}
+
+export interface TriageSuggestion {
+  id: number;
+  incident_id: number;
+  outcome: TriageOutcome;
+  /** Plain-language explanation for any outcome other than `valid`. */
+  message: string | null;
+  severity: Severity | null;
+  rationale: string | null;
+  next_steps: string[];
+  duplicates: TriageCandidate[];
+  candidates_sent: TriageCandidate[];
+  provider: string;
+  model: string;
+  prompt_version: string;
+  requested_by: UserSummary;
+  created_at: string;
+  cost_usd: number;
+  /** The incident changed after the suggestion was made; it can no longer be accepted. */
+  stale: boolean;
+  decision: TriageDecision | null;
+}
+
+export interface TriageSuggestionPage {
+  items: TriageSuggestion[];
+}
+
+export interface TriageDecisionCreate {
+  decision: 'accept' | 'reject';
+  severity?: Severity;
+  add_internal_note?: boolean;
+  /** Edited note text; omitted to use the suggestion's rationale and next steps. */
+  note?: string;
+  reason?: string;
 }

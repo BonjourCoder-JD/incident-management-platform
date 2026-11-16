@@ -287,7 +287,9 @@ def test_database_rejects_changes_to_comments(statement, login_as, responder, db
     client = login_as(responder)
     incident_id = _incident(client)
     comment = _post(client, incident_id, "Original", "internal").json()
-    with pytest.raises(DBAPIError, match="append-only"):
+    # TRUNCATE is also refused by the foreign key from triage_decisions (migration 0008), which
+    # PostgreSQL checks before the append-only trigger; either way the comment survives.
+    with pytest.raises(DBAPIError, match="append-only|referenced in a foreign key constraint"):
         with db.begin_nested():
             db.execute(text(statement), {"id": comment["id"]})
     db.expire_all()

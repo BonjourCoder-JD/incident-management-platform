@@ -30,6 +30,7 @@ A two-page case study covering the architecture, security engineering, automated
 - Tamper-resistant audit trail: every change recorded with who, when and before/after values, in the same transaction, shown as a readable history
 - Incident discussion: public comments between the reporter and responders, plus internal notes that only responders and admins can read, enforced by the API; comments are append-only and shown as plain text
 - SLA tracking: response and resolution targets per severity, deadlines and overdue states on every incident and in the list, dashboard compliance figures, automatic escalation by a background worker, and admin-only policy versions with history
+- Optional AI-assisted triage (off by default): a suggested severity, rationale, next steps and possible duplicates that a responder reviews, edits and accepts or rejects; nothing changes without a person, every decision is audited, and spending is capped in the database. Tests and CI use an offline test provider only
 - User management for admins and self-service password changes
 - Loading, empty, error, forbidden and success states throughout, and a responsive layout down to phone width
 
@@ -45,6 +46,6 @@ Every push and pull request to `main` runs [`.github/workflows/ci.yml`](.github/
 | Migration round trip | On a separate disposable database: upgrade, downgrade to base (confirming tables and enum types are removed), upgrade again, then run the admin bootstrap command |
 | Frontend tests and build | `npm ci` from the lockfile, Vitest + React Testing Library tests, TypeScript type check and Vite production build |
 | Docker images | Builds the backend and frontend images |
-| End-to-end tests | Playwright (Chromium) against a disposable Docker Compose stack with random per-run passwords: sign-in and sessions, authorization and cross-reporter isolation, incidents, history, dashboard, CSV export and axe accessibility checks. Failure evidence is limited to screenshots, page snapshots and backend logs |
+| End-to-end tests | Playwright (Chromium) against a disposable Docker Compose stack with random per-run passwords: sign-in and sessions, authorization and cross-reporter isolation, incidents, history, dashboard, CSV export, triage with the offline test provider and axe accessibility checks. Failure evidence is limited to screenshots, page snapshots and backend logs |
 
 CI never connects to a development database and uses no repository secrets. The database password in the workflow is a throwaway value for the job's temporary container. The workflow token is read-only (`contents: read`).

@@ -251,7 +251,9 @@ def test_failed_incident_write_rolls_back_the_event(failing_client, monkeypatch,
 def test_database_rejects_changes_to_audit_events(statement, login_as, responder, db):
     incident = _create(login_as(responder))
     [created] = _events(db, incident["id"])
-    with pytest.raises(DBAPIError, match="append-only"):
+    # TRUNCATE is also refused by the foreign keys from the triage tables (migration 0008), which
+    # PostgreSQL checks before the append-only trigger; either way the history survives.
+    with pytest.raises(DBAPIError, match="append-only|referenced in a foreign key constraint"):
         with db.begin_nested():
             db.execute(text(statement), {"id": created.id})
     db.expire_all()
