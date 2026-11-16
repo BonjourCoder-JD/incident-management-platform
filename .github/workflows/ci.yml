@@ -163,10 +163,13 @@ jobs:
         run: |
           docker build --target prod --tag incident-backend:prod ./backend
           docker build --file deploy/web.Dockerfile --tag incident-web:prod .
+          docker build --file deploy/backup.Dockerfile --tag incident-backup:prod .
       - name: Production images run as non-root without test tools
         run: |
           test "$(docker run --rm incident-backend:prod id -u)" = "10001"
           test "$(docker run --rm --entrypoint id incident-web:prod -u)" = "10002"
+          test "$(docker run --rm incident-backup:prod id -u)" = "10003"
+          test "$(docker run --rm incident-backup:prod stat -c '%a %u' /backups)" = "700 10003"
           if docker run --rm incident-backend:prod python -c "import pytest" 2>/dev/null; then echo "pytest found in the production image" >&2; exit 1; fi
       - name: Production configuration is valid
         env:
@@ -175,6 +178,7 @@ jobs:
           APP_DB_PASSWORD: ci-config-check-only-runtime
         run: |
           docker compose -f deploy/compose.prod.yaml config --quiet
+          docker compose -f deploy/compose.prod.yaml --profile demo config --quiet
           docker run --rm --entrypoint caddy -e SITE_ADDRESS=localhost incident-web:prod validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
   e2e:
@@ -208,7 +212,7 @@ jobs:
         # run.sh generates and masks per-run passwords, starts the "imp-e2e" Compose project,
         # migrates, bootstraps an admin, runs Playwright and always removes the stack.
         run: bash ./run.sh
-      - name: Run the public-demo end-to-end tests (production images, demo mode)
+      - name: Run the public-demo end-to-end tests and the backup and restore drill (production images, demo mode)
         run: bash ./run.sh --demo
       - name: Upload failure evidence
         if: failure()

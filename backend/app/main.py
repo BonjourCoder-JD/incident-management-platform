@@ -8,6 +8,7 @@ from .auth import router as auth_router
 from .comments import router as comments_router
 from .config import APP_ENV, production_problems
 from .demo import router as demo_router
+from .logs import RequestContextMiddleware, configure as configure_logging
 from .exports import router as exports_router
 from .health import router as health_router
 from .incidents import router as incidents_router
@@ -15,6 +16,7 @@ from .sla_api import router as sla_router
 from .triage_api import router as triage_router
 from .users import router as users_router
 
+configure_logging()  # JSON in production (LOG_FORMAT=json), before anything can fail
 PRODUCTION = APP_ENV == "production"
 if PRODUCTION and (problems := production_problems()):
     # Fail closed: never serve a public deployment with unsafe settings.
@@ -23,6 +25,7 @@ if PRODUCTION and (problems := production_problems()):
 # Interactive API docs are for development only.
 docs = {"docs_url": None, "redoc_url": None, "openapi_url": None} if PRODUCTION else {}
 app = FastAPI(title="Incident Management API", version="0.3.0", **docs)
+app.add_middleware(RequestContextMiddleware)
 app.include_router(health_router)
 app.include_router(demo_router)
 app.include_router(auth_router)

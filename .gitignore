@@ -240,3 +240,11 @@ e2e/.cache/
 
 # Production secrets (Milestone 6): the filled-in copy of deploy/.env.production.example
 deploy/.env.production
+
+# Database backups and restore drills (Milestone 6 Phase D): never committed
+*.dump
+*.dump.sha256
+*.partial
+backups/
+*.age
+imp-backup*.tar

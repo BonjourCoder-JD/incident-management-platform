@@ -4,7 +4,8 @@
 #   e2e/run.sh [playwright args]              Playwright on this machine (Node 24, `npx playwright install chromium`)
 #   e2e/run.sh --in-docker [playwright args]  Playwright inside the official Playwright image (no local Node needed)
 #   e2e/run.sh --demo [...]                   The public demo: production images in demo mode, database
-#                                             incidents_demo seeded by the real daily reset, tests/demo.spec.ts
+#                                             incidents_demo seeded by the real daily reset, tests/demo.spec.ts,
+#                                             then the backup and restore drill (e2e/backup_check.sh)
 #
 # The stack is always the Compose project "imp-e2e": its own containers, network and database volume
 # (imp-e2e_postgres_data). Passwords are random per run and never written to disk. The stack is removed
@@ -45,7 +46,7 @@ assert_e2e_only() {
 
 remove_stack() {
   assert_e2e_only
-  "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  "${COMPOSE[@]}" --profile backup down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
 
 on_exit() {
@@ -144,3 +145,8 @@ fi
 
 # Everything the suite did through the UI and API must still match the audit trail.
 "${COMPOSE[@]}" exec -T backend python -m app.cli sla-verify
+
+if [[ "$DEMO" == true ]]; then
+  source e2e/backup_check.sh
+  backup_check
+fi

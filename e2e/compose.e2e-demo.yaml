@@ -26,3 +26,25 @@ services:
     networks:
       default:
         ipv4_address: 172.31.6.10
+  # The backup and restore drill only (e2e/backup_check.sh): `run --rm` with the backup profile.
+  backup:
+    profiles: ["backup"]
+    build:
+      context: .
+      dockerfile: deploy/backup.Dockerfile
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_DATABASE: ${POSTGRES_DB}
+    volumes:
+      - backups:/backups
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  backups:

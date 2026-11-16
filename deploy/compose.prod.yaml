@@ -10,7 +10,18 @@
 #
 # Two database roles: POSTGRES_USER owns the schema and runs migrations only; the API and the worker
 # connect as APP_DB_USER, which can read and add audit records but never change, remove or unprotect them.
+#
+# Operations (Phase D, docs/OPERATIONS.md): JSON logs with request IDs, rotated by Docker; health
+# checks for the backend (ready), worker, demo reset and backups (`docker compose ps`); a daily backup
+# of POSTGRES_DB into the backups volume.
 name: imp-prod
+
+# Docker keeps at most 5 x 10 MB of logs per container, so logs cannot fill the server's disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 x-backend: &backend
   image: ${BACKEND_IMAGE:-imp-backend:prod}
@@ -31,6 +42,9 @@ x-backend: &backend
     WRITE_LIMIT_TRIAGE_PER_HOUR: ${WRITE_LIMIT_TRIAGE_PER_HOUR:-20}
     # Public demo: published demo accounts with protections and a banner (see app/demo.py).
     DEMO_MODE: ${DEMO_MODE:-false}
+    # One JSON object per line, with request IDs; no secrets, tokens or incident text (app/logs.py).
+    LOG_FORMAT: json
+  logging: *logging
   read_only: true
   tmpfs:
     - /tmp
@@ -45,6 +59,7 @@ services:
   db:
     image: postgres:17-alpine
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-incident}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
@@ -66,6 +81,7 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-incident}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-incidents}
       APP_DB_USER: ${APP_DB_USER:-imp_app}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD}
+      LOG_FORMAT: json
     command: ["sh", "-c", "alembic upgrade head && python -m app.cli db-roles"]
     restart: "no"
     healthcheck:
@@ -93,7 +109,12 @@ services:
     command: ["python", "-m", "app.cli", "sla-escalate", "--loop", "--interval", "60"]
     restart: unless-stopped
     healthcheck:
-      disable: true
+      # Unhealthy when the latest run failed (or the database is not ready) or none succeeded for 5 minutes.
+      test: ["CMD", "python", "-m", "app.cli", "health-check", "worker", "--max-age", "300"]
+      interval: 60s
+      timeout: 15s
+      start_period: 90s
+      retries: 2
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -107,13 +128,58 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-incident}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-incidents}
       DEMO_MODE: "true"
       DEMO_DATABASE: ${POSTGRES_DB:-incidents}
+      LOG_FORMAT: json
     command: ["python", "-m", "app.cli", "demo-reset", "--daily"]
     restart: unless-stopped
     healthcheck:
-      disable: true
+      # Unhealthy when the latest reset failed or was refused (kept until the next successful one).
+      test: ["CMD", "python", "-m", "app.cli", "health-check", "demo-reset", "--max-age", "90000"]
+      interval: 5m
+      timeout: 15s
+      start_period: 2m
+      retries: 1
     depends_on:
       migrate:
         condition: service_completed_successfully
+
+  # Daily backup of POSTGRES_DB (03:30 UTC by default, before the demo reset) into the backups volume:
+  # custom-format dumps, 0600, with SHA-256 files; the newest BACKUP_KEEP are kept. Restores go into a
+  # new database only (deploy/restore.sh; docs/OPERATIONS.md). Copy dumps off the server regularly.
+  backup:
+    image: ${BACKUP_IMAGE:-imp-backup:prod}
+    build:
+      context: ..
+      dockerfile: deploy/backup.Dockerfile
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-incident}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      BACKUP_DATABASE: ${POSTGRES_DB:-incidents}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+      BACKUP_TIME_UTC: ${BACKUP_TIME_UTC:-03:30}
+    volumes:
+      - backups:/backups
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # Unhealthy when the latest backup failed or none succeeded for 26 hours.
+      test: ["CMD", "backup.sh", "health"]
+      interval: 5m
+      timeout: 10s
+      start_period: 2m
+      retries: 1
+    logging: *logging
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - internal
 
   web:
     image: ${WEB_IMAGE:-imp-web:prod}
@@ -136,6 +202,7 @@ services:
       - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
+    logging: *logging
     depends_on:
       backend:
         condition: service_healthy
@@ -153,3 +220,4 @@ volumes:
   postgres_data:
   caddy_data:
   caddy_config:
+  backups:
