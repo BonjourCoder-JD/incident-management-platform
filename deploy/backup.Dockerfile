@@ -5,7 +5,7 @@
 # updates weekly, and docs/OPERATIONS.md (Updating base images) describes the manual procedure.
 # The PostgreSQL client package comes from the Alpine 3.22 repository at build time (Alpine removes old
 # package versions, so pinning one would break future builds); deployments use the published digest.
-FROM alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 RUN apk add --no-cache postgresql17-client \
     && adduser -D -H -u 10003 backup \
     && install -d -m 700 -o backup -g backup /backups
