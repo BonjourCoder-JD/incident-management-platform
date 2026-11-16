@@ -1,9 +1,9 @@
 # Operations — single-server public demo
 
-How to check, back up and recover the production stack (`deploy/compose.prod.yaml`) on its one server. Everything here uses only the stack itself: no external monitoring or paid services. Run the commands from the repository root on the server, with this shorthand:
+How to check, back up, deploy, roll back and recover the production stack (`deploy/compose.prod.yaml`) on its one server. Everything here uses only the stack itself and free GitHub features: no paid services. Run the commands from the repository root on the server, with this shorthand (`deploy/.deploy/images.env` holds the digest-pinned images of the deployed version; `deploy/deploy.sh` writes it):
 
 ```sh
-C="docker compose -f deploy/compose.prod.yaml --env-file deploy/.env.production --profile demo"
+C="docker compose -p imp-prod -f deploy/compose.prod.yaml --env-file deploy/.env.production --env-file deploy/.deploy/images.env --profile demo"
 ```
 
 `deploy/.env.production` holds the only copy of the database passwords. Keep a copy of it **off the server** (for example in a password manager): backups do not contain it, and without it a restore cannot be switched in.
@@ -68,7 +68,7 @@ echo 'age1...' > ~/imp-backup-recipient.txt
 Weekly, from your own machine: `backup.sh export` checks the newest dump against its checksum and streams it with its `.sha256` as a tar; the server encrypts the stream before it leaves:
 
 ```sh
-ssh server 'cd incident-management-platform && docker compose -f deploy/compose.prod.yaml --env-file deploy/.env.production exec -T backup backup.sh export | age -R ~/imp-backup-recipient.txt' > imp-backup-20261116.tar.age
+ssh server 'cd incident-management-platform && docker compose -p imp-prod -f deploy/compose.prod.yaml --env-file deploy/.env.production --env-file deploy/.deploy/images.env exec -T backup backup.sh export | age -R ~/imp-backup-recipient.txt' > imp-backup-20261116.tar.age
 age -d -i imp-backup-key.txt imp-backup-20261116.tar.age | tar -tvf -     # check: one .dump and its .sha256
 ```
 
@@ -111,14 +111,84 @@ $C exec db sh -c 'dropdb -U "$POSTGRES_USER" incidents_demo_restore_202611161900
 
 ### B. Database volume lost (or a new server)
 
-1. Clone the repository at the deployed commit and put back `deploy/.env.production` (from your off-server copy).
-2. Start only the database (it creates an empty `POSTGRES_DB`) and the backup tools, and put the dump back into the `backups` volume if that was lost too:
+1. Prepare the server (section 6, Deployment setup) with `deploy/.env.production` from your off-server copy.
+2. Deploy the version the backup came from (section 6), which starts the stack on an empty database, then put the dump back into the `backups` volume if that was lost too:
 
    ```sh
-   $C up -d db
+   git checkout --detach <commit> && bash deploy/deploy.sh <commit>
    $C run --rm --no-deps -T backup sh -c 'cd /backups && tar -xf -' < imp-backup.tar
    ```
 
 3. Restore and verify (section 4), then switch in as in A, step 2 (the empty database is the one renamed to `_replaced_<date>`). `migrate` recreates the runtime role, so nothing else is needed.
 
 **What a restore loses:** everything after the backup (at most a day), and all sessions (everyone signs in again). Rate-limit counters restart.
+
+## 6. Releases and deployment
+
+**How a version becomes deployable.** Every push to `main` runs *CI* and *Security scans*. The *Release images* workflow publishes a commit only when both succeeded for exactly that commit (`deploy/release_gate.py`; a failed, cancelled or skipped run refuses). It then builds the three production images natively on a GitHub **linux/arm64** runner (the server's architecture), scans them (Trivy), deploys them on that runner with `deploy/deploy.sh`, runs `deploy/smoke.sh` and the rollback regression test (`deploy/tests/rollback_regression.sh`), and only then publishes them to GitHub Container Registry; a commit's published images are never replaced:
+
+```
+ghcr.io/bonjourcoder-jd/incident-management-platform/backend:sha-<commit>
+ghcr.io/bonjourcoder-jd/incident-management-platform/web:sha-<commit>
+ghcr.io/bonjourcoder-jd/incident-management-platform/backup:sha-<commit>
+```
+
+The workflow summary lists each image's digest. A version is always a full 40-character commit SHA on `main`.
+
+**Nothing deploys automatically.** The *Deploy* workflow runs only when started by hand (Actions > Deploy > Run workflow, with the version); no other workflow can start it (the release has no permission to). Its first job refuses unless the `production` environment exists with a required reviewer and a deployment-branch restriction, because GitHub would otherwise create a missing environment on first use without protection; then a required reviewer must approve the run. It checks that the version is on `main` and published, connects over SSH with a pinned host key, checks out the version on the server, runs `deploy/deploy.sh <version>`, and then runs the smoke test again from GitHub against the public address.
+
+### Deployment setup (Phase F; once)
+
+On GitHub (repository settings; nothing here is stored in the repository):
+
+1. **Packages:** after the first release, set the three packages (`backend`, `web`, `backup`) to **public** (Package settings > Change visibility), so the server and the Deploy workflow can pull them without a credential.
+2. **Environment `production`:** Settings > Environments > New environment. Add yourself as a **required reviewer**, and limit deployment branches to `main`.
+3. **Environment secrets** (in `production`): `DEPLOY_HOST` (the server's address), `DEPLOY_USER` (an unprivileged user in the `docker` group), `DEPLOY_SSH_KEY` (a private key used only for deployments), `DEPLOY_KNOWN_HOSTS` (the server's host key line, from `ssh-keyscan -t ed25519 <host>`, checked against the server's own `/etc/ssh/ssh_host_ed25519_key.pub`).
+4. **Environment variables:** `DEPLOY_PATH` (the repository's absolute path on the server) and `DEPLOY_SITE_ADDRESS` (the public hostname).
+
+On the server: install Docker and git, `git clone https://github.com/BonjourCoder-JD/incident-management-platform.git` (public; no credentials), create `deploy/.env.production` from the example (`chmod 600`), and add the deployment key's public half to the deploy user's `~/.ssh/authorized_keys`.
+
+### Deploying by hand (the same steps the workflow runs)
+
+```sh
+git fetch origin && git checkout --detach <commit> && bash deploy/deploy.sh <commit>
+bash deploy/deploy.sh --status        # deployed version, previous version, database migration
+```
+
+`deploy.sh` pulls the version's images and pins them by digest, refuses if the database is at a migration the version does not know, backs up the database, starts the version (the `migrate` service applies new migrations), and runs the smoke test: readiness, the web app and its security headers, the dashboard page, a refused wrong password, sign-in, the session, the dashboard summary, the incident list, sign-out. In the public demo it uses the published demo responder; otherwise set `SMOKE_EMAIL` and `SMOKE_PASSWORD` in the environment. Exit status 0 deployed, 1 failed, 2 refused (nothing changed). Every version's pinned images are kept in `deploy/.deploy/images-<commit>.env`.
+
+## 7. Rollback
+
+**Rolling back an image never undoes a database migration.** Each version's code accepts only the migrations it knows; the backend reports 503 `unknown_database_revision` on a newer database. `deploy.sh` therefore checks before switching.
+
+**A failed deployment without a migration** rolls back by itself: `deploy.sh` checks out the previous commit (so the compose file and scripts match), restarts the previous images, smoke-tests them, and exits 1 saying so. It runs from a private copy of itself, so the checkout cannot change the running script.
+
+**Rolling back by choice** is a deployment of an earlier version (`deploy.sh --status` shows the previous one): run the Deploy workflow with that commit, or the commands in section 6. If no migration was added in between, that is all.
+
+**After a migration** (a failed deployment that migrated, or rolling back past a migration), `deploy.sh` refuses or stops and names the **pre-deploy backup** it took. Either deploy a fixed version (roll forward), or restore that backup and then deploy the earlier version:
+
+```sh
+P=<previous commit>
+CP="docker compose -p imp-prod -f deploy/compose.prod.yaml --env-file deploy/.env.production --env-file deploy/.deploy/images-$P.env --profile demo"
+$C run --rm --no-deps backup restore.sh <pre-deploy backup>.dump       # -> restored_database=NAME
+$CP run --rm --no-deps migrate python -m app.cli verify-restore --database NAME   # checked by the earlier version's code
+$C stop backend worker demo-reset backup
+$C exec db sh -c 'psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 \
+  -c "ALTER DATABASE incidents_demo RENAME TO incidents_demo_replaced_<date>" \
+  -c "ALTER DATABASE NAME RENAME TO incidents_demo"'
+git checkout --detach $P && bash deploy/deploy.sh $P
+```
+
+Do **not** run the current version's `migrate` after switching (it would apply the newer migration again); `deploy.sh $P` runs the earlier version's. Changes made after the pre-deploy backup are lost.
+
+## 8. Updating base images and actions
+
+All base images are pinned to multi-architecture digests (`backend/Dockerfile`, `deploy/web.Dockerfile`, `deploy/backup.Dockerfile`, the `db` image in `deploy/compose.prod.yaml`), and GitHub Actions to commit SHAs. **Dependabot** proposes updates weekly as pull requests, which must pass CI and the *Security scans* workflow before merging. By hand:
+
+```sh
+docker buildx imagetools inspect python:3.13-slim --format '{{json .Manifest.Digest}}'   # new digest
+# replace the @sha256:... after the tag, then confirm both architectures are present:
+docker buildx imagetools inspect python:3.13-slim@sha256:<new digest> | grep -E 'linux/(amd64|arm64)'
+```
+
+**Vulnerability scanning.** The *Security scans* workflow (every change and weekly) runs `pip-audit`, `npm audit` and Trivy on the production images; HIGH and CRITICAL findings that have a fix fail it. An accepted finding goes into `.trivyignore.yaml` with a reason and an expiry date within about a month, after which the scan fails again.

@@ -1,0 +1,97 @@
+name: Deploy
+
+# Milestone 6 Phase E. Manual only (workflow_dispatch): no push, schedule or other workflow starts it, and
+# the Release images workflow has no permission to dispatch workflows. Deploys one published version (the
+# commit SHA of a Release images run) through the "production" environment, whose required reviewers must
+# approve each run (Settings > Environments; docs/OPERATIONS.md, Deployment setup). The first job refuses
+# to continue unless that environment exists with required reviewers and a branch restriction, because a
+# missing environment would otherwise be created on first use without any protection.
+# A rollback is a deployment of an earlier version; deploy/deploy.sh refuses one that would need a
+# database migration to be undone.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Full 40-character commit SHA of a published release (deploy or roll back to it)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  protection:
+    name: The production environment requires approval
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Required reviewers and a branch restriction are configured
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/environments/production" > "$RUNNER_TEMP/environment.json" ||
+            { echo "::error::the production environment does not exist (docs/OPERATIONS.md, Deployment setup)"; exit 1; }
+          reviewers="$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' "$RUNNER_TEMP/environment.json")"
+          branches="$(jq '.deployment_branch_policy != null' "$RUNNER_TEMP/environment.json")"
+          echo "required reviewers: $reviewers; deployment branches restricted: $branches"
+          [[ "$reviewers" -ge 1 ]] || { echo "::error::production has no required reviewers"; exit 1; }
+          [[ "$branches" == true ]] || { echo "::error::production does not restrict deployment branches"; exit 1; }
+
+  deploy:
+    name: Deploy to production
+    needs: protection
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://${{ vars.DEPLOY_SITE_ADDRESS }}
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Check the requested version
+        run: |
+          [[ "$VERSION" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::version must be a full 40-character lowercase commit SHA"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The version is on main and its images are published
+        run: |
+          git merge-base --is-ancestor "$VERSION" origin/main || { echo "::error::$VERSION is not on main"; exit 1; }
+          git checkout --quiet --detach "$VERSION"
+          for image in backend web backup; do
+            docker manifest inspect "ghcr.io/${GITHUB_REPOSITORY,,}/$image:sha-$VERSION" > /dev/null ||
+              { echo "::error::$image:sha-$VERSION is not published (did the Release images workflow pass?)"; exit 1; }
+          done
+      - name: Configure SSH (key and pinned host key from environment secrets)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          [[ -n "$DEPLOY_SSH_KEY" && -n "$DEPLOY_KNOWN_HOSTS" ]] || { echo "::error::the production environment secrets are not set"; exit 1; }
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+      - name: Deploy on the server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo "::error::DEPLOY_PATH must be an absolute path"; exit 1; }
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd '$DEPLOY_PATH' && git fetch --quiet origin && git checkout --quiet --detach '$VERSION' && bash deploy/deploy.sh '$VERSION'"
+      - name: External smoke test (from GitHub, through the public address)
+        env:
+          SITE_ADDRESS: ${{ vars.DEPLOY_SITE_ADDRESS }}
+        run: bash deploy/smoke.sh "https://$SITE_ADDRESS"
+      - name: Remove the SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

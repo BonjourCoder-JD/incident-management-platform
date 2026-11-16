@@ -1,0 +1,130 @@
+# Accepted image-scan findings (Milestone 6 Phase E), used by the Security scans and Release workflows.
+# The scans fail on HIGH and CRITICAL vulnerabilities that have a fix. An entry here must say why the
+# finding is accepted and expire within about a month, after which the scan fails again until the
+# finding is fixed (usually by taking a newer base-image digest from Dependabot) or re-reviewed.
+vulnerabilities:
+  - id: CVE-2026-85091
+    statement: >-
+      zlib1g in the official python:3.13-slim base image (Debian 13). Debian has a fix (deb13u1) but the
+      official image has not been rebuilt with it yet; take the new base digest when Dependabot offers it.
+      The API does not decompress untrusted data with zlib (no request compression; Caddy handles encoding).
+    expired_at: 2026-12-16
+  - id: CVE-2026-78661
+    statement: >-
+      golang.org/x/net inside the official Caddy 2.11 binary, fixed in x/net 0.62.0. Waiting for a Caddy
+      release and official image rebuild; take the new caddy digest when Dependabot offers it.
+    expired_at: 2026-12-16
+  # gosu in the official postgres:17-alpine image (gosu 1.19, built with Go 1.24.6). Assessment, 2026-11-16:
+  # - Use: docker-entrypoint.sh runs `exec gosu postgres ...` only when the container starts as root, to
+  #   drop to the postgres user. deploy/compose.prod.yaml runs the database as postgres (uid 70) with
+  #   all capabilities dropped, so that line is never reached and gosu never executes in production.
+  # - Reachability: all 26 findings are in Go standard-library packages gosu does not link (crypto/tls,
+  #   crypto/x509, net/http and its HTTP/2, net/url, net, net/mail, mime, encoding/xml, encoding/asn1,
+  #   html/template, x/net/idna, os.Root). The binary's symbol table contains none of them, while the code
+  #   it does use (syscall.Setuid, syscall.Exec, github.com/moby/sys/user) is present. Trivy reports the
+  #   standard-library version, not which packages are linked.
+  # Scope: these IDs, for this one file only; any new finding in gosu, or these IDs elsewhere, still fail.
+  - id: CVE-2025-61726
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2025-61729
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2025-68121
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-111943
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-25679
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-27145
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-32280
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-32281
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-32283
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-33811
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-33814
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-33818
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-39820
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-39821
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-39822
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-39836
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-42499
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-42504
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-56853
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-56858
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-56859
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-56860
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-56862
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-78667
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-78669
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16
+  - id: CVE-2026-97031
+    paths: ["usr/local/bin/gosu"]
+    statement: Not linked into gosu, and gosu does not run (database runs as postgres); see the assessment above.
+    expired_at: 2026-12-16

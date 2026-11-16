@@ -1,0 +1,151 @@
+name: Release images
+
+# Milestone 6 Phase E. Publication requires, for exactly the same commit: the CI workflow and the
+# Security scans workflow both succeeded on that push to main (deploy/release_gate.py; a failed, cancelled
+# or skipped run refuses), then, in this workflow, a native linux/arm64 build, the image scan, a deployment
+# on the runner with deploy/deploy.sh and its smoke test, and the rollback regression test. Only then are
+# the images pushed to GitHub Container Registry as
+# ghcr.io/<owner>/incident-management-platform/{backend,web,backup}:sha-<commit>; existing tags are never
+# overwritten. Nothing is deployed to a server here: this workflow has no deployment credentials and no
+# permission to start other workflows; deployments are manual and approved (Deploy workflow).
+on:
+  workflow_run:
+    workflows: [CI, Security scans]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+env:
+  TRIVY_IMAGE: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+
+jobs:
+  gate:
+    name: Required checks for this commit
+    # Runs when either required workflow finishes for a push to main in this repository (never a pull
+    # request, a schedule or a fork); the second one to finish is the one that can publish.
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read  # read this commit's workflow runs
+    outputs:
+      decision: ${{ steps.gate.outputs.decision }}
+    env:
+      VERSION: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: CI and Security scans succeeded for exactly this commit
+        id: gate
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$VERSION&event=push&per_page=100" > "$RUNNER_TEMP/runs.json"
+          status=0
+          python3 deploy/release_gate.py "$VERSION" "$GITHUB_REPOSITORY" < "$RUNNER_TEMP/runs.json" > "$RUNNER_TEMP/gate.txt" || status=$?
+          cat "$RUNNER_TEMP/gate.txt"
+          grep '^decision=' "$RUNNER_TEMP/gate.txt" >> "$GITHUB_OUTPUT"
+          { echo "### Release gate for \`$VERSION\`"; echo; sed 's/^/- /' "$RUNNER_TEMP/gate.txt"; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+  release:
+    name: Build, test and publish arm64 images
+    needs: gate
+    if: needs.gate.outputs.decision == 'publish'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write  # push to this repository's container registry only
+    env:
+      VERSION: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Build the production images (native linux/arm64)
+        run: |
+          IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "IMAGE_REPO=$IMAGE_REPO" >> "$GITHUB_ENV"
+          labels=(--label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY"
+                  --label "org.opencontainers.image.revision=$VERSION")
+          docker build --platform linux/arm64 "${labels[@]}" --target prod --tag "$IMAGE_REPO/backend:sha-$VERSION" ./backend
+          docker build --platform linux/arm64 "${labels[@]}" --file deploy/web.Dockerfile --tag "$IMAGE_REPO/web:sha-$VERSION" .
+          docker build --platform linux/arm64 "${labels[@]}" --file deploy/backup.Dockerfile --tag "$IMAGE_REPO/backup:sha-$VERSION" .
+          for image in backend web backup; do
+            test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_REPO/$image:sha-$VERSION")" = linux/arm64
+          done
+          test "$(docker run --rm "$IMAGE_REPO/backend:sha-$VERSION" id -u)" = 10001
+          test "$(docker run --rm --entrypoint id "$IMAGE_REPO/web:sha-$VERSION" -u)" = 10002
+          test "$(docker run --rm "$IMAGE_REPO/backup:sha-$VERSION" id -u)" = 10003
+      - name: Scan the images (Trivy; HIGH and CRITICAL with a fix fail the release)
+        run: |
+          for image in backend web backup; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/repo:ro" -w /repo "$TRIVY_IMAGE" \
+              image --quiet --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --ignorefile .trivyignore.yaml \
+              "$IMAGE_REPO/$image:sha-$VERSION"
+          done
+      - name: Deploy on this runner with deploy/deploy.sh and smoke-test (demo mode, random passwords)
+        env:
+          DEPLOY_PULL: "0"       # the images were just built here
+          SMOKE_INSECURE: "1"    # Caddy's locally issued certificate for "localhost"
+        run: |
+          umask 077
+          {
+            echo "POSTGRES_USER=incident"
+            echo "POSTGRES_DB=incidents_demo"
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"
+            echo "APP_DB_PASSWORD=$(openssl rand -hex 24)"
+            echo "SITE_ADDRESS=localhost"
+            echo "DEMO_MODE=true"
+            echo "TRIAGE_PROVIDER=fake"
+          } > deploy/.env.production
+          bash deploy/deploy.sh "$VERSION"
+          bash deploy/deploy.sh "$VERSION"   # repeating a deployment is safe (backup, same images, smoke test)
+          bash deploy/deploy.sh --status
+          docker compose -p imp-prod -f deploy/compose.prod.yaml --env-file deploy/.env.production \
+            --env-file deploy/.deploy/images.env --profile demo ps --format '{{.Service}}: {{.Status}}'
+          docker compose -p imp-prod -f deploy/compose.prod.yaml --env-file deploy/.env.production \
+            --env-file deploy/.deploy/images.env --profile demo down --volumes --remove-orphans
+      - name: Rollback regression test (a failed deployment restores the previous images and checkout)
+        run: |
+          bash deploy/tests/rollback_regression.sh "$IMAGE_REPO/backend:sha-$VERSION" "$IMAGE_REPO/web:sha-$VERSION" \
+            "$IMAGE_REPO/backup:sha-$VERSION"
+      - name: Publish to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          # A commit's images are published once; a second run for the same commit never replaces them.
+          existing=0
+          for image in backend web backup; do
+            docker manifest inspect "$IMAGE_REPO/$image:sha-$VERSION" > /dev/null 2>&1 && existing=$((existing + 1))
+          done
+          if [[ "$existing" != 0 ]]; then
+            echo "Images for $VERSION already published ($existing of 3); nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"
+            docker logout ghcr.io
+            exit 0
+          fi
+          {
+            echo "### Published images for \`$VERSION\` (linux/arm64)"
+            echo
+            echo "| Image | Pinned reference |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for image in backend web backup; do
+            docker push --quiet "$IMAGE_REPO/$image:sha-$VERSION"
+            pinned="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE_REPO/$image:sha-$VERSION" | grep -m 1 '@sha256:')"
+            echo "| $image | \`$pinned\` |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          docker logout ghcr.io

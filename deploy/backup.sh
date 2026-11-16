@@ -47,6 +47,7 @@ config_ok() {
 }
 
 prune() {
+  # shellcheck disable=SC2010  # names are written only by this script and filtered by a strict pattern
   ls -1 "$BACKUP_DIR" | grep -E "^$BACKUP_DATABASE-[0-9]{8}T[0-9]{6}Z\.dump\$" | sort -r | tail -n +"$((BACKUP_KEEP + 1))" |
     while read -r old; do
       rm -f "$BACKUP_DIR/$old" "$BACKUP_DIR/$old.sha256"
@@ -117,6 +118,7 @@ health() {
 }
 
 export_backup() {  # [FILE]: the archive goes to stdout, so messages go to stderr
+  # shellcheck disable=SC2010  # names are written only by this script and filtered by a strict pattern
   file=${1:-$(ls -1 "$BACKUP_DIR" | grep -E '^[a-z0-9_]+-[0-9]{8}T[0-9]{6}Z\.dump$' | sort | tail -n 1)}
   if ! printf '%s' "$file" | grep -Eq '^[a-z0-9_]+-[0-9]{8}T[0-9]{6}Z\.dump$'; then log ERROR "no backup to export" >&2; return 2; fi
   if [ ! -f "$BACKUP_DIR/$file" ] || [ ! -f "$BACKUP_DIR/$file.sha256" ]; then log ERROR "backup or its checksum file is missing: $file" >&2; return 2; fi

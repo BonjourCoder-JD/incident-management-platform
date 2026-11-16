@@ -248,3 +248,6 @@ deploy/.env.production
 backups/
 *.age
 imp-backup*.tar
+
+# Deployment state on the server (Milestone 6 Phase E): image digests, versions, lock
+deploy/.deploy/
