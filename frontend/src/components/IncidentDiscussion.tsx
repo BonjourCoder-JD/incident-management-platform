@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ApiError, createComment, listComments } from '../api/client';
+import { ApiError, createComment, listComments, redactComment } from '../api/client';
 import { COMMENT_MAX_LENGTH, type CommentVisibility, type Incident, type IncidentComment } from '../api/types';
 import { permissions, useCurrentUser } from '../auth';
 import { formatDateTime } from '../format';
@@ -25,7 +25,67 @@ function lengthBand(length: number): string {
   return '';
 }
 
-function Comment({ comment, reporterId }: { comment: IncidentComment; reporterId: number | null }) {
+/** Administrators only: remove a comment's text, with a reason. */
+function RemoveComment({ incidentId, comment, onRemoved }: {
+  incidentId: number; comment: IncidentComment; onRemoved: (updated: IncidentComment) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const id = `remove-comment-${comment.id}`;
+
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!reason.trim()) {
+      setError('Enter a reason for removing this comment.');
+      inputRef.current?.focus();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      onRemoved(await redactComment(incidentId, comment.id, reason.trim()));
+    } catch (caught) {
+      setError(caught instanceof ApiError ? (caught.fieldErrors.reason ?? caught.message) : 'The comment could not be removed. Try again.');
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button type="button" className="button button-ghost button-small comment-remove" aria-label={`Remove comment from ${comment.author.email}`}
+        onClick={() => setOpen(true)}>
+        Remove…
+      </button>
+    );
+  }
+  return (
+    <form className="comment-remove-form" noValidate onSubmit={submit} aria-label={`Remove comment from ${comment.author.email}`}>
+      <p className="small">The text will be hidden from everyone, permanently. The removal and your reason are recorded.</p>
+      <div className="field">
+        <label htmlFor={id}>Reason for removing this comment</label>
+        <input id={id} ref={inputRef} type="text" maxLength={500} value={reason} disabled={busy}
+          aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}
+          onChange={event => setReason(event.target.value)} />
+        {error && <p className="field-error" id={`${id}-error`}>{error}</p>}
+      </div>
+      <div className="form-actions">
+        <button type="button" className="button button-ghost button-small" disabled={busy} onClick={() => { setOpen(false); setError(null); }}>Cancel</button>
+        <button type="submit" className="button button-danger button-small" disabled={busy}>{busy ? 'Removing…' : 'Remove comment'}</button>
+      </div>
+    </form>
+  );
+}
+
+function Comment({ comment, reporterId, incidentId, canRemove, onRemoved }: {
+  comment: IncidentComment; reporterId: number | null; incidentId: number; canRemove: boolean; onRemoved: (updated: IncidentComment) => void;
+}) {
   const internal = comment.visibility === 'internal';
   return (
     <li className={`comment comment-${comment.visibility}`}>
@@ -36,8 +96,18 @@ function Comment({ comment, reporterId }: { comment: IncidentComment; reporterId
         <time className="muted small" dateTime={comment.created_at}>{formatDateTime(comment.created_at)}</time>
       </div>
       {internal && <p className="comment-internal-hint small">Not visible to the reporter</p>}
-      {/* Plain text only: React escapes it, and line breaks are kept by CSS. */}
-      <p className="comment-body">{comment.body}</p>
+      {comment.redacted ? (
+        <p className="comment-removed">
+          Removed by an administrator{comment.redacted_at && <> on <time dateTime={comment.redacted_at}>{formatDateTime(comment.redacted_at)}</time></>}.
+          {comment.redaction_reason && <span className="muted small"> Reason: {comment.redaction_reason}</span>}
+        </p>
+      ) : (
+        <>
+          {/* Plain text only: React escapes it, and line breaks are kept by CSS. */}
+          <p className="comment-body">{comment.body}</p>
+          {canRemove && <RemoveComment incidentId={incidentId} comment={comment} onRemoved={onRemoved} />}
+        </>
+      )}
     </li>
   );
 }
@@ -46,6 +116,7 @@ function Comment({ comment, reporterId }: { comment: IncidentComment; reporterId
 export function IncidentDiscussion({ incident, refreshKey = 0 }: { incident: Incident; refreshKey?: number }) {
   const user = useCurrentUser();
   const staff = permissions.canTriage(user);
+  const canRemove = permissions.canManageUsers(user); // administrators only; enforced by the API
   const defaultVisibility: CommentVisibility = staff ? 'internal' : 'public';
 
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
@@ -79,6 +150,13 @@ export function IncidentDiscussion({ incident, refreshKey = 0 }: { incident: Inc
       });
     return () => controller.abort();
   }, [incident.id, retryKey, refreshKey]);
+
+  function handleRemoved(updated: IncidentComment) {
+    setState(current => (current.kind === 'ready'
+      ? { ...current, items: current.items.map(item => (item.id === updated.id ? updated : item)) }
+      : current));
+    setAnnouncement('Comment removed.');
+  }
 
   async function loadMore() {
     if (state.kind !== 'ready') return;
@@ -163,7 +241,10 @@ export function IncidentDiscussion({ incident, refreshKey = 0 }: { incident: Inc
       )}
       {state.kind === 'ready' && state.items.length > 0 && (
         <ol className="comment-list" aria-label="Comments, oldest first">
-          {state.items.map(comment => <Comment key={comment.id} comment={comment} reporterId={incident.reporter_id} />)}
+          {state.items.map(comment => (
+            <Comment key={comment.id} comment={comment} reporterId={incident.reporter_id} incidentId={incident.id}
+              canRemove={canRemove} onRemoved={handleRemoved} />
+          ))}
         </ol>
       )}
       {state.kind === 'ready' && state.items.length < state.total && (

@@ -1,4 +1,4 @@
-"""Unit tests for password hashing, tokens, the rate limiter and the admin bootstrap command."""
+"""Unit tests for password hashing, tokens and the admin bootstrap command (the rate limiter: test_rate_limit.py)."""
 import io
 
 import pytest
@@ -7,7 +7,6 @@ from sqlalchemy import select
 from app import cli
 from app.models import User, UserRole
 from app.security import (
-    LoginRateLimiter,
     hash_password,
     hash_token,
     new_token,
@@ -42,20 +41,6 @@ def test_tokens_are_random_and_hashed():
     first, second = new_token(), new_token()
     assert first != second and len(first) >= 43
     assert len(hash_token(first)) == 64 and hash_token(first) != first
-
-
-def test_rate_limiter_sliding_window():
-    now = [1000.0]
-    limiter = LoginRateLimiter(clock=lambda: now[0])
-    for _ in range(3):
-        limiter.record_failure("email:a")
-    assert limiter.retry_after("email:a", limit=3, window=60) == 61
-    assert limiter.retry_after("email:b", limit=3, window=60) is None
-    now[0] += 61
-    assert limiter.retry_after("email:a", limit=3, window=60) is None
-    limiter.record_failure("email:a")
-    limiter.reset("email:a")
-    assert limiter.retry_after("email:a", limit=1, window=60) is None
 
 
 # ---- Admin bootstrap command --------------------------------------------------------

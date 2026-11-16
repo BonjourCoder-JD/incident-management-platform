@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
+from . import rate_limit
 from .models import AuthSession, User, UserRole
 from .schemas import LoginRequest, PasswordChange, SessionInfo, UserRead
 from .security import (
@@ -16,7 +17,6 @@ from .security import (
     burn_password_check,
     hash_password,
     hash_token,
-    login_limiter,
     new_token,
     normalize_email,
     password_needs_rehash,
@@ -114,6 +114,8 @@ def require_roles(*roles: UserRole):
 
 
 def _client_ip(request: Request) -> str:
+    """The client address. Behind the production proxy, uvicorn sets it from X-Forwarded-For only
+    when the request comes from the trusted proxy (FORWARDED_ALLOW_IPS); otherwise it is the peer."""
     return request.client.host if request.client else "unknown"
 
 
@@ -124,13 +126,18 @@ def _session_info(session: AuthSession) -> SessionInfo:
 @router.post("/login", response_model=SessionInfo)
 def login(payload: LoginRequest, request: Request, response: Response, db: DbSession):
     email = normalize_email(payload.email)
-    limits = (
-        (f"email:{email}", settings.login_max_failures_per_email),
-        (f"ip:{_client_ip(request)}", settings.login_max_failures_per_ip),
-    )
-    for key, limit in limits:
-        retry_after = login_limiter.retry_after(key, limit, settings.login_failure_window_seconds)
+    window = settings.login_failure_window_seconds
+    limits = [
+        rate_limit.Limit(rate_limit.LOGIN_EMAIL, email, settings.login_max_failures_per_email, window),
+        rate_limit.Limit(rate_limit.LOGIN_IP, _client_ip(request), settings.login_max_failures_per_ip, window),
+    ]
+    # Shared by every process and kept across restarts (PostgreSQL); attempts on the same email or
+    # address are serialised until this transaction ends.
+    rate_limit.lock(db, limits)
+    for limit in limits:
+        retry_after = rate_limit.retry_after(db, limit)
         if retry_after is not None:
+            db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many failed sign-in attempts. Try again later.",
@@ -146,8 +153,9 @@ def login(payload: LoginRequest, request: Request, response: Response, db: DbSes
 
     # Inactive accounts get the same answer as wrong passwords: nothing about the account is revealed.
     if user is None or not password_ok or not user.is_active:
-        for key, _ in limits:
-            login_limiter.record_failure(key)
+        for limit in limits:
+            rate_limit.record(db, limit)
+        db.commit()  # the failure must count even though the request fails
         raise _unauthorized(INVALID_CREDENTIALS)
 
     if password_needs_rehash(user.password_hash):
@@ -167,9 +175,9 @@ def login(payload: LoginRequest, request: Request, response: Response, db: DbSes
         expires_at=_now() + timedelta(hours=settings.session_absolute_hours),
     )
     db.add(session)
+    rate_limit.reset(db, limits[0])  # a successful sign-in clears that email's failures
     db.commit()
     db.refresh(session)
-    login_limiter.reset(limits[0][0])
     _set_session_cookie(response, token)
     return _session_info(session)
 

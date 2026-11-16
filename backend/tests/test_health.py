@@ -35,7 +35,7 @@ def test_database_health(use_bind):
 
 
 def test_ready_when_the_schema_matches_the_code(use_bind):
-    assert health.expected_revisions() == frozenset({'0008'})
+    assert health.expected_revisions() == frozenset({'0010'})  # update with each new migration
     response = client.get('/health/ready')
     assert (response.status_code, response.json()) == (200, {'status': 'ready'})
     assert response.headers['cache-control'] == 'no-store'
@@ -55,7 +55,7 @@ def test_not_ready_returns_503_until_the_schema_matches(statement, reason, use_b
     response = client.get('/health/ready')
     assert response.status_code == 503
     assert response.json() == {'status': 'not_ready', 'reason': reason}
-    assert '0008' not in response.text and '0005' not in response.text  # revisions are logged, not published
+    assert '0010' not in response.text and '0005' not in response.text  # revisions are logged, not published
     assert 'code expects' in caplog.text
 
 

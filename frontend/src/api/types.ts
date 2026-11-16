@@ -199,9 +199,14 @@ export type CommentVisibility = (typeof COMMENT_VISIBILITIES)[number];
 export interface IncidentComment {
   id: number;
   visibility: CommentVisibility;
-  body: string;
+  /** Null once an administrator has removed the comment; its text is never sent again. */
+  body: string | null;
   author: UserSummary;
   created_at: string;
+  redacted?: boolean;
+  redacted_at?: string | null;
+  /** Responders and admins only. */
+  redaction_reason?: string | null;
 }
 
 export interface CommentPage {

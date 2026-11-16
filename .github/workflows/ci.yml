@@ -172,6 +172,7 @@ jobs:
         env:
           SITE_ADDRESS: localhost
           POSTGRES_PASSWORD: ci-config-check-only
+          APP_DB_PASSWORD: ci-config-check-only-runtime
         run: |
           docker compose -f deploy/compose.prod.yaml config --quiet
           docker run --rm --entrypoint caddy -e SITE_ADDRESS=localhost incident-web:prod validate --config /etc/caddy/Caddyfile --adapter caddyfile

@@ -221,6 +221,14 @@ export function createComment(id: number, payload: CommentCreate): Promise<Incid
   return request<IncidentComment>(`/incidents/${encodeURIComponent(String(id))}/comments`, { method: 'POST', body: JSON.stringify(payload) });
 }
 
+/** Administrators only. Irreversible: the text is withheld from every reader afterwards. */
+export function redactComment(incidentId: number, commentId: number, reason: string): Promise<IncidentComment> {
+  return request<IncidentComment>(
+    `/incidents/${encodeURIComponent(String(incidentId))}/comments/${encodeURIComponent(String(commentId))}/redaction`,
+    { method: 'POST', body: JSON.stringify({ reason }) },
+  );
+}
+
 export function getIncidentSla(id: number, signal?: AbortSignal): Promise<IncidentSla> {
   return request<IncidentSla>(`/incidents/${encodeURIComponent(String(id))}/sla`, { signal });
 }

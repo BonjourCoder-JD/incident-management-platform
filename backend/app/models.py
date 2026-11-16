@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from typing import Any
-from sqlalchemy import Boolean, CheckConstraint, Computed, DateTime, Enum, ForeignKey, Index, Integer, SmallInteger, String, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Computed, DateTime, Enum, ForeignKey, Index, Integer, SmallInteger, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
@@ -419,3 +419,38 @@ class TriageDecision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     decider: Mapped[User] = relationship(lazy="joined")
+
+
+
+class RateLimitEvent(Base):
+    """One counted event for a sliding-window limit (migration 0009): failed sign-ins per email and
+    per client IP, and public-demo writes per client IP. Keys are stored only as SHA-256 hashes.
+    Shared by every process and kept across restarts; pruned by app.maintenance."""
+    __tablename__ = "rate_limit_events"
+    __table_args__ = (
+        Index("ix_rate_limit_events_bucket_key_hash_created_at", "bucket", "key_hash", "created_at"),
+        Index("ix_rate_limit_events_created_at", "created_at"),
+        CheckConstraint("char_length(key_hash) = 64", name="ck_rate_limit_events_key_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    bucket: Mapped[str] = mapped_column(String(32), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CommentRedaction(Base):
+    """An administrator's redaction of one comment (migration 0010, ISSUE-18). Append-only (trigger).
+    The comment row stays unchanged as evidence; API readers withhold its body once this row exists."""
+    __tablename__ = "comment_redactions"
+    __table_args__ = (
+        UniqueConstraint("comment_id", name="uq_comment_redactions_comment_id"),
+        CheckConstraint("char_length(reason) BETWEEN 1 AND 500", name="ck_comment_redactions_reason_length"),
+        CheckConstraint(f"reason !~ '[{_COMMENT_FORBIDDEN_SQL}]'", name="ck_comment_redactions_reason_chars"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    comment_id: Mapped[int] = mapped_column(ForeignKey("incident_comments.id", ondelete="RESTRICT"), nullable=False)
+    redacted_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

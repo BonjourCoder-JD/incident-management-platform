@@ -272,3 +272,69 @@ describe('Incident discussion', () => {
     await waitFor(() => expect(within(discussion).queryByText('Newest')).toBeNull());
   });
 });
+
+describe('Comment removal (administrators)', () => {
+  const adminUser = makeUser('admin');
+  const removed = (id: number, reason: string | null): IncidentComment => ({
+    ...comment(id, 'ignored', reporterUser), body: null, redacted: true, redacted_at: '2026-11-16T09:00:00Z', redaction_reason: reason,
+  });
+
+  it('shows a removal notice instead of the text, with the reason for staff', async () => {
+    open(responderUser, serveDiscussion([removed(1, 'Personal data'), comment(2, 'Still here')], responderUser));
+    const discussion = await region();
+    const [first, second] = await within(discussion).findAllByRole('listitem');
+    expect(first).toHaveTextContent(/Removed by an administrator on .*\. Reason: Personal data/);
+    expect(first.querySelector('.comment-body')).toBeNull();
+    expect(second).toHaveTextContent('Still here');
+  });
+
+  it('shows reporters the notice without any reason', async () => {
+    open(reporterUser, serveDiscussion([removed(1, null)], reporterUser));
+    const [item] = await within(await region()).findAllByRole('listitem');
+    expect(item).toHaveTextContent('Removed by an administrator on');
+    expect(item).not.toHaveTextContent('Reason');
+  });
+
+  it.each([['reporter', reporterUser], ['responder', responderUser]])('offers no removal to a %s', async (_role, user) => {
+    open(user, serveDiscussion([comment(1, 'Text')], user));
+    await within(await region()).findAllByRole('listitem');
+    expect(screen.queryByRole('button', { name: /Remove/ })).toBeNull();
+  });
+
+  it('lets an administrator remove a comment with a reason', async () => {
+    const calls: { url: string; body: unknown; csrf: string | null }[] = [];
+    const base = serveDiscussion([comment(1, 'Call me on 555-0100', reporterUser)], adminUser);
+    const fetchMock = open(adminUser, (url, init) => {
+      if (url.pathname.endsWith('/redaction')) {
+        calls.push({ url: url.pathname, body: JSON.parse(String(init.body)), csrf: headerOf(init, 'X-CSRF-Token') });
+        return jsonResponse(201, removed(1, 'Personal data'));
+      }
+      return base(url, init);
+    });
+    const discussion = await region();
+    await userEvent.click(await within(discussion).findByRole('button', { name: /Remove comment from reporter@example.com/ }));
+    const reason = within(discussion).getByLabelText('Reason for removing this comment');
+    expect(reason).toHaveFocus();
+    await userEvent.click(within(discussion).getByRole('button', { name: 'Remove comment' }));
+    expect(within(discussion).getByText('Enter a reason for removing this comment.')).toBeInTheDocument();
+    expect(calls).toEqual([]);
+    await userEvent.type(reason, '  Personal data ');
+    await userEvent.click(within(discussion).getByRole('button', { name: 'Remove comment' }));
+    await waitFor(() => expect(within(discussion).getAllByRole('listitem')[0]).toHaveTextContent('Removed by an administrator'));
+    expect(calls).toEqual([{ url: '/api/incidents/5/comments/1/redaction', body: { reason: 'Personal data' }, csrf: TEST_CSRF }]);
+    expect(within(discussion).queryByText('Call me on 555-0100')).toBeNull();
+    expect(within(discussion).getByText('Comment removed.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it('shows the server message when removal fails', async () => {
+    const base = serveDiscussion([comment(1, 'Text', reporterUser)], adminUser);
+    open(adminUser, (url, init) => (url.pathname.endsWith('/redaction')
+      ? jsonResponse(409, { detail: 'This comment has already been removed.' }) : base(url, init)));
+    const discussion = await region();
+    await userEvent.click(await within(discussion).findByRole('button', { name: /Remove comment from/ }));
+    await userEvent.type(within(discussion).getByLabelText('Reason for removing this comment'), 'Duplicate');
+    await userEvent.click(within(discussion).getByRole('button', { name: 'Remove comment' }));
+    expect(await within(discussion).findByText('This comment has already been removed.')).toBeInTheDocument();
+  });
+});

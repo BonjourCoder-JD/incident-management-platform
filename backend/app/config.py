@@ -27,6 +27,10 @@ class Settings:
     login_failure_window_seconds: int = _int("LOGIN_FAILURE_WINDOW_SECONDS", 15 * 60)
     # CSV exports larger than this are refused (HTTP 413), never truncated.
     export_max_rows: int = _int("EXPORT_MAX_ROWS", 10_000)
+    # Public-demo write limits per client IP per hour (Milestone 6 Phase B); 0 turns a limit off.
+    write_limit_incidents_per_hour: int = _int("WRITE_LIMIT_INCIDENTS_PER_HOUR", 0)
+    write_limit_comments_per_hour: int = _int("WRITE_LIMIT_COMMENTS_PER_HOUR", 0)
+    write_limit_triage_per_hour: int = _int("WRITE_LIMIT_TRIAGE_PER_HOUR", 0)
 
 
 

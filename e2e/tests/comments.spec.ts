@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { readCsvDownload } from '../support/csv';
-import { createIncident, expect, pageApi, signIn, signOut, test } from '../support/fixtures';
+import { bootstrapAdmin, createIncident, expect, pageApi, signIn, signOut, test } from '../support/fixtures';
 
 const discussion = (page: Page) => page.getByRole('region', { name: 'Discussion' });
 
@@ -159,5 +159,34 @@ test.describe('Discussion and internal notes', () => {
     await expect(discussion(page).locator('.comment-body')).toHaveText(`${payload}\nSecond line`);
     await expect(discussion(page).locator('.comment-list img, .comment-list script')).toHaveCount(0);
     expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+  });
+
+  test('an administrator removes a comment; nobody can read its text afterwards', async ({ page, browser, makeUser }) => {
+    const reporter = await makeUser('reporter');
+    const secret = canary();
+    await signIn(page, reporter);
+    const id = await createIncident(page, { title: 'Removal probe', severity: 'low' });
+    expect((await pageApi(page, 'POST', `/incidents/${id}/comments`, { body: `My number is ${secret}`, visibility: 'public' })).status).toBe(201);
+    // Reporters and responders cannot remove comments.
+    expect((await pageApi(page, 'POST', `/incidents/${id}/comments/1/redaction`, { reason: 'x' })).status).toBe(403);
+
+    const adminContext = await browser.newContext();
+    const admin = await adminContext.newPage();
+    await signIn(admin, bootstrapAdmin());
+    const region = await openDiscussion(admin, id);
+    await region.getByRole('button', { name: `Remove comment from ${reporter.email}` }).click();
+    await region.getByLabel('Reason for removing this comment').fill('Contained a phone number');
+    await region.getByRole('button', { name: 'Remove comment' }).click();
+    await expect(region.getByText(/Removed by an administrator on .*Reason: Contained a phone number/)).toBeVisible();
+    await expect(admin.locator('body')).not.toContainText(secret);
+    await adminContext.close();
+
+    const reporterRegion = await openDiscussion(page, id);
+    await expect(reporterRegion.getByText(/Removed by an administrator on/)).toBeVisible();
+    await expect(page.locator('body')).not.toContainText(secret);
+    await expect(page.locator('body')).not.toContainText('Contained a phone number'); // the reason is staff-only
+    const api = await pageApi(page, 'GET', `/incidents/${id}/comments`);
+    expect(api.text).not.toContain(secret);
+    expect((api.json as { items: { body: string | null; redacted: boolean }[] }).items[0]).toMatchObject({ body: null, redacted: true });
   });
 });

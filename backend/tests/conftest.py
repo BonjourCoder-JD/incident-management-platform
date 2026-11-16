@@ -10,7 +10,7 @@ from app.database import engine, get_db
 from app.exports import get_export_opener
 from app.main import app
 from app.models import User, UserRole
-from app.security import hash_password, login_limiter
+from app.security import hash_password
 
 # Synthetic credentials for tests only. Emails use the reserved example.com domain.
 TEST_PASSWORD = "correct-horse-battery-staple"
@@ -93,10 +93,8 @@ def _isolate(session_factory, connection, export_connections):
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_analytics_connection] = override_analytics
     app.dependency_overrides[get_export_opener] = lambda: export_connections.open
-    login_limiter.reset()
     yield
     app.dependency_overrides.clear()
-    login_limiter.reset()
 
 
 @pytest.fixture

@@ -70,6 +70,9 @@ def sla_escalate(loop: bool, interval: int) -> int:
     if not 10 <= interval <= 3600:
         print("--interval must be between 10 and 3600 seconds.", file=sys.stderr)
         return 2
+    from .maintenance import CLEANUP_INTERVAL_SECONDS
+
+    last_cleanup = None
     while True:
         # Never run against a schema this code was not written for (for example before migrations).
         ready, reason = readiness()
@@ -89,7 +92,43 @@ def sla_escalate(loop: bool, interval: int) -> int:
                 return 1
         if not loop:
             return 0
+        if last_cleanup is None or time.monotonic() - last_cleanup >= CLEANUP_INTERVAL_SECONDS:
+            last_cleanup = time.monotonic()
+            cleanup()
         time.sleep(interval)
+
+
+def cleanup() -> int:
+    """Removes expired sessions and old rate-limit events (hourly in the worker)."""
+    from .database import SessionLocal
+    from .maintenance import cleanup as run_cleanup
+
+    try:
+        with SessionLocal() as db:
+            result = run_cleanup(db)
+    except Exception:
+        logging.getLogger(__name__).exception("Maintenance failed")
+        return 1
+    print(f"Maintenance: removed {result.sessions} expired sessions and {result.rate_limit_events} old rate-limit events.", flush=True)
+    return 0
+
+
+def db_roles() -> int:
+    """Creates or updates the least-privilege runtime role. Run as the migration owner after
+    `alembic upgrade head`. Reads APP_DB_USER (default imp_app) and APP_DB_PASSWORD."""
+    from .database import engine
+    from .db_roles import DEFAULT_RUNTIME_ROLE, apply
+
+    role = os.environ.get("APP_DB_USER", DEFAULT_RUNTIME_ROLE).strip()
+    password = os.environ.get("APP_DB_PASSWORD", "")
+    try:
+        with engine.begin() as conn:
+            apply(conn, role, password)
+    except ValueError as error:
+        print(f"db-roles: {error}", file=sys.stderr)
+        return 2
+    print(f"db-roles: runtime role {role} has least-privilege access.")
+    return 0
 
 
 def sla_verify() -> int:
@@ -115,7 +154,14 @@ def main(argv: list[str] | None = None) -> int:
     escalate.add_argument("--loop", action="store_true", help="Run repeatedly")
     escalate.add_argument("--interval", type=int, default=60, help="Seconds between runs with --loop (10-3600)")
     commands.add_parser("sla-verify", help="Check the stored SLA cycles against the audit trail")
+    commands.add_parser("cleanup", help="Remove expired sessions and old rate-limit events")
+    commands.add_parser("db-roles", help="Create or update the least-privilege runtime database role (run as the owner)")
     args = parser.parse_args(argv)
+
+    if args.command == "cleanup":
+        return cleanup()
+    if args.command == "db-roles":
+        return db_roles()
 
     if args.command == "sla-escalate":
         return sla_escalate(loop=args.loop, interval=args.interval)

@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import triage
+from . import rate_limit, triage
 from .auth import require_roles
 from .config import TriageSettings, triage_settings
 from .database import get_db
@@ -121,7 +121,8 @@ def triage_status(user: Staff, db: DbSession, settings: Settings, provider: Prov
 
 
 @router.post("/incidents/{incident_id}/triage-suggestions", response_model=TriageSuggestionRead, status_code=status.HTTP_201_CREATED)
-def request_triage(incident_id: int, user: Staff, db: DbSession, settings: Settings, provider: Provider):
+def request_triage(incident_id: int, user: Staff, db: DbSession, settings: Settings, provider: Provider,
+                   _limit: Annotated[None, Depends(rate_limit.limit_writes(rate_limit.WRITE_TRIAGE))]):
     incident = _get_visible(db, incident_id, user)  # no row lock: the provider call must not hold one
     instance, reason = provider
     if instance is None:

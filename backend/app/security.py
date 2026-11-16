@@ -2,9 +2,6 @@
 import hashlib
 import re
 import secrets
-import threading
-import time
-from collections import defaultdict, deque
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
@@ -56,8 +53,12 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+# Control characters and lone surrogates (PostgreSQL text cannot store NUL; none belong in an address).
+_EMAIL_FORBIDDEN = re.compile('[' + chr(0) + '-' + chr(0x1f) + chr(0x7f) + '-' + chr(0x9f) + chr(0xd800) + '-' + chr(0xdfff) + ']')
+
+
 def is_valid_email(email: str) -> bool:
-    return len(email) <= EMAIL_MAX_LENGTH and bool(_EMAIL_PATTERN.match(email))
+    return len(email) <= EMAIL_MAX_LENGTH and not _EMAIL_FORBIDDEN.search(email) and bool(_EMAIL_PATTERN.match(email))
 
 
 def new_token() -> str:
@@ -69,46 +70,3 @@ def hash_token(token: str) -> str:
     # Tokens are high-entropy random values, so a fast hash is appropriate (unlike passwords).
     return hashlib.sha256(token.encode()).hexdigest()
 
-
-class LoginRateLimiter:
-    """Sliding-window count of failed logins per key (email or client IP).
-
-    In-memory: resets on restart and is per process. Adequate for a single
-    uvicorn worker; a shared store (e.g. Redis or PostgreSQL) is needed for more.
-    """
-
-    def __init__(self, clock=time.monotonic):
-        self._clock = clock
-        self._failures: dict[str, deque[float]] = defaultdict(deque)
-        self._lock = threading.Lock()
-
-    def _prune(self, key: str, window: int) -> deque[float]:
-        events = self._failures[key]
-        cutoff = self._clock() - window
-        while events and events[0] <= cutoff:
-            events.popleft()
-        if not events:
-            self._failures.pop(key, None)
-        return events
-
-    def retry_after(self, key: str, limit: int, window: int) -> int | None:
-        """Seconds until another attempt is allowed, or None if not limited."""
-        with self._lock:
-            events = self._prune(key, window)
-            if len(events) < limit:
-                return None
-            return max(1, int(events[0] + window - self._clock()) + 1)
-
-    def record_failure(self, key: str) -> None:
-        with self._lock:
-            self._failures[key].append(self._clock())
-
-    def reset(self, key: str | None = None) -> None:
-        with self._lock:
-            if key is None:
-                self._failures.clear()
-            else:
-                self._failures.pop(key, None)
-
-
-login_limiter = LoginRateLimiter()

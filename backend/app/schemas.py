@@ -46,6 +46,14 @@ class LoginRequest(BaseModel):
     # Loose bound only: an over-long password is treated as wrong credentials, not described.
     password: str = Field(max_length=1024)
 
+    @field_validator("email")
+    @classmethod
+    def check_email_characters(cls, value: str) -> str:
+        # Only malformed input is described; whether an account exists is never revealed.
+        if _COMMENT_FORBIDDEN.search(value):
+            raise ValueError("Enter a valid email address.")
+        return value
+
 class SessionInfo(BaseModel):
     user: UserRead
     csrf_token: str
@@ -84,12 +92,31 @@ class UserUpdate(BaseModel):
 
 # ---- Incidents -----------------------------------------------------------------
 
+# C0 controls except tab, line feed and carriage return; DEL and C1 controls; lone surrogates.
+_INCIDENT_TEXT_FORBIDDEN = re.compile(
+    "[" + chr(0) + "-" + chr(8) + chr(11) + chr(12) + chr(14) + "-" + chr(0x1F) + chr(0x7F) + "-" + chr(0x9F)
+    + chr(0xD800) + "-" + chr(0xDFFF) + "]")
+
+
+def _incident_text(value: str) -> str:
+    """BUG-2: control characters (including NUL, which PostgreSQL cannot store) and lone surrogates
+    are refused with 422. Tab, line feed and carriage return stay allowed."""
+    if _INCIDENT_TEXT_FORBIDDEN.search(value):
+        raise ValueError("Remove control characters from this text.")
+    return value
+
+
 class IncidentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=1)
     severity: Severity
     assignee_id: int | None = Field(default=None, gt=0, le=INT32_MAX)
+
+    @field_validator("title", "description")
+    @classmethod
+    def check_text(cls, value: str) -> str:
+        return _incident_text(value)
 
 class IncidentUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -98,6 +125,11 @@ class IncidentUpdate(BaseModel):
     severity: Severity | None = None
     status: IncidentStatus | None = None
     assignee_id: int | None = Field(default=None, gt=0, le=INT32_MAX)
+
+    @field_validator("title", "description")
+    @classmethod
+    def check_text(cls, value: str | None) -> str | None:
+        return None if value is None else _incident_text(value)
 
 class IncidentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -203,9 +235,30 @@ class CommentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     visibility: CommentVisibility
-    body: str
+    # None once an administrator has redacted the comment (ISSUE-18): the text is never sent again.
+    body: str | None
     author: UserSummary
     created_at: datetime
+    redacted: bool = False
+    redacted_at: datetime | None = None
+    # Responders and admins only; always None for reporters.
+    redaction_reason: str | None = None
+
+class CommentRedactionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def check_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Enter a reason for removing this comment.")
+        if _COMMENT_FORBIDDEN.search(value):
+            raise ValueError("The reason cannot contain control characters.")
+        if len(value) > 500:
+            raise ValueError("The reason can be at most 500 characters.")
+        return value
 
 class CommentPage(BaseModel):
     items: list[CommentRead]

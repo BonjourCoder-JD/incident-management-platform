@@ -2,7 +2,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
-from . import audit
+from . import audit, rate_limit
 from .auth import CurrentUser
 from .database import get_db
 from .models import Incident, IncidentEvent, IncidentEventAction, IncidentStatus, Severity, User, UserRole
@@ -67,7 +67,8 @@ def _check_assignee(db: Session, assignee_id: int) -> None:
 
 
 @router.post("", response_model=IncidentRead, status_code=status.HTTP_201_CREATED)
-def create_incident(payload: IncidentCreate, user: CurrentUser, db: DbSession):
+def create_incident(payload: IncidentCreate, user: CurrentUser, db: DbSession,
+                    _limit: Annotated[None, Depends(rate_limit.limit_writes(rate_limit.WRITE_INCIDENT))]):
     data = payload.model_dump(exclude_unset=True)
     _forbid_triage_fields(user, {key for key, value in data.items() if value is not None})
     if payload.assignee_id is not None:

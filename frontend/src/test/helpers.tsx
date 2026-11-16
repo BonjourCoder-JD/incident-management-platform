@@ -68,7 +68,7 @@ interface MockOptions {
 }
 
 const EVENTS_PATH = /^\/api\/incidents\/\d+\/events$/;
-const COMMENTS_PATH = /^\/api\/incidents\/\d+\/comments$/;
+const COMMENTS_PATH = /^\/api\/incidents\/\d+\/comments(\/\d+\/redaction)?$/;
 const SLA_PATH = /^\/api\/incidents\/\d+\/sla$/;
 const TRIAGE_PATH = /^\/api\/(triage\/status|incidents\/\d+\/triage-suggestions|triage-suggestions\/\d+\/decision)$/;
 

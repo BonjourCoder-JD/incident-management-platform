@@ -79,7 +79,8 @@ def test_reporter_reads_and_posts_public_comments_on_own_incident(login_as, repo
     assert comment["visibility"] == "public"
     assert comment["body"] == "Is there an update?"
     assert comment["author"] == {"id": reporter.id, "email": reporter.email}
-    assert set(comment) == {"id", "visibility", "body", "author", "created_at"}
+    assert set(comment) == {"id", "visibility", "body", "author", "created_at", "redacted", "redacted_at", "redaction_reason"}
+    assert (comment["redacted"], comment["redacted_at"], comment["redaction_reason"]) == (False, None, None)
     page = _list(client, incident_id).json()
     assert page["total"] == 1 and page["items"] == [comment]
 

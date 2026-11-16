@@ -46,15 +46,24 @@ def database_revisions(conn: Connection) -> frozenset[str]:
     return frozenset(conn.execute(text("SELECT version_num FROM alembic_version")).scalars())
 
 
-def readiness(bind: Engine | Connection | None = None) -> tuple[bool, str]:
-    """(ready, reason). Reasons: ok, database_unavailable, migrations_pending, unknown_database_revision."""
+def readiness(bind: Engine | Connection | None = None, check_role: bool | None = None) -> tuple[bool, str]:
+    """(ready, reason). Reasons: ok, database_unavailable, migrations_pending, unknown_database_revision,
+    and in production unsafe_database_role (superuser, table owner, or able to modify audit tables)."""
+    from .config import APP_ENV
+    from .db_roles import role_problems
+
     bind = bind if bind is not None else engine
+    check_role = APP_ENV == "production" if check_role is None else check_role
     try:
         with bind.connect() if isinstance(bind, Engine) else nullcontext(bind) as conn:
             current = database_revisions(conn)
+            unsafe = role_problems(conn) if check_role else []
     except SQLAlchemyError:
         logger.warning("Not ready: database unavailable")
         return False, "database_unavailable"
+    if unsafe:
+        logger.warning("Not ready (unsafe_database_role): %s", ", ".join(unsafe))
+        return False, "unsafe_database_role"
     expected = expected_revisions()
     if current == expected:
         return True, "ok"
