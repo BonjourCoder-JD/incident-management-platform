@@ -26,12 +26,13 @@ A two-page case study covering the architecture, security engineering, automated
 - Report-an-incident form with validation and clear error messages
 - Incident detail view with one-click status changes, assignment and editing
 - Secure CSV export: role-scoped, streamed, formula-injection safe, size-limited, and recorded in an append-only log
-- Analytics dashboard computed in PostgreSQL: volume, status and severity breakdowns, current backlog, created-versus-resolved trend and time to first resolution from the audit trail, scoped to what each role may see
+- Analytics dashboard computed in PostgreSQL: five headline figures labelled by date range or current state, a created-versus-resolved trend, a status donut, severity bars, SLA compliance and escalations, current backlog and time to first resolution, scoped to what each role may see, with keyboard-readable charts and table alternatives
 - Tamper-resistant audit trail: every change recorded with who, when and before/after values, in the same transaction, shown as a readable history
 - Incident discussion: public comments between the reporter and responders, plus internal notes that only responders and admins can read, enforced by the API; comments are append-only and shown as plain text
 - SLA tracking: response and resolution targets per severity, deadlines and overdue states on every incident and in the list, dashboard compliance figures, automatic escalation by a background worker, and admin-only policy versions with history
 - Optional AI-assisted triage (off by default): a suggested severity, rationale, next steps and possible duplicates that a responder reviews, edits and accepts or rejects; nothing changes without a person, every decision is audited, and spending is capped in the database. Tests and CI use an offline test provider only
 - User management for admins and self-service password changes
+- Light and dark themes that follow the operating system until you choose one in the header (remembered in that browser)
 - Loading, empty, error, forbidden and success states throughout, and a responsive layout down to phone width
 
 Setup, local test commands, the frontend guide and the API reference are in [README-foundation.md](README-foundation.md). Architecture, verified functionality, known issues and the remaining milestones are in [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md).

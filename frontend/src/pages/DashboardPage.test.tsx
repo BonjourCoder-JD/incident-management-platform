@@ -71,9 +71,13 @@ describe('Dashboard', () => {
 
     const tile = (label: string) => screen.getByText(label).closest('.stat-tile') as HTMLElement;
     expect(within(tile('Incidents in range')).getByText('12')).toBeInTheDocument();
-    expect(within(tile('Still open')).getByText('5')).toBeInTheDocument();
+    expect(within(tile('Open backlog now')).getByText('9')).toBeInTheDocument();
+    expect(tile('Open backlog now')).toHaveTextContent('5 of them created in range');
     expect(within(tile('Resolved or closed')).getByText('7')).toBeInTheDocument();
     expect(within(tile('Median time to resolve')).getByText('18.5 h')).toBeInTheDocument();
+
+    expect(within(tile('SLA overdue now')).getByText('4')).toBeInTheDocument();
+    expect(tile('SLA overdue now')).toHaveTextContent('2 approaching');
 
     const status = screen.getByRole('list', { name: 'Incidents by status' });
     expect(within(status).getByText('Investigating').closest('li')).toHaveTextContent('2 · 17%');
@@ -200,6 +204,73 @@ describe('Dashboard', () => {
     expect(await screen.findByRole('heading', { name: 'My dashboard' })).toBeInTheDocument();
     expect(screen.getByText('Figures cover only the incidents you reported.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'My dashboard' })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('shows five headline figures, each saying whether it follows the dates or is current', async () => {
+    mockApi(() => jsonResponse(200, summary()));
+    renderAt('/dashboard');
+    await screen.findByText('Incidents in range');
+    const tiles = [...document.querySelectorAll('.kpi-row .stat-tile')] as HTMLElement[];
+    expect(tiles.map(t => [t.querySelector('.stat-label')!.textContent, t.querySelector('.stat-scope')!.textContent, t.querySelector('.stat-value')!.textContent])).toEqual([
+      ['Incidents in range', 'Selected dates', '12'],
+      ['Open backlog now', 'Right now', '9'],
+      ['Resolved or closed', 'Selected dates', '7'],
+      ['Median time to resolve', 'Selected dates', '18.5 h'],
+      ['SLA overdue now', 'Right now', '4'],
+    ]);
+    // Accents decorate the labels; icons are hidden from assistive technology.
+    expect(tiles.every(t => t.querySelector('svg')?.getAttribute('aria-hidden') === 'true')).toBe(true);
+    expect(tiles.map(t => [...t.classList].find(c => c.startsWith('accent-')))).toEqual(['accent-blue', 'accent-orange', 'accent-green', 'accent-purple', 'accent-red']);
+  });
+
+  it('shows status as a donut whose legend carries exact counts and shares', async () => {
+    mockApi(() => jsonResponse(200, summary()));
+    renderAt('/dashboard');
+    const ring = await screen.findByRole('img', { name: /^Incidents by status: Open 3 \(25%\), Investigating 2 \(17%\), Resolved 4 \(33%\), Closed 3 \(25%\)\. 12 incidents in total\./ });
+    const legend = screen.getByRole('list', { name: 'Incidents by status' });
+    expect(within(legend).getAllByRole('listitem').map(li => li.textContent)).toEqual(['Open3 · 25%', 'Investigating2 · 17%', 'Resolved4 · 33%', 'Closed3 · 25%']);
+    expect(document.querySelectorAll('.donut-segment')).toHaveLength(4);
+
+    act(() => ring.focus());
+    expect(ring).toHaveTextContent('3Open · 25%');
+    await userEvent.keyboard('{ArrowRight}');
+    expect(ring).toHaveTextContent('2Investigating · 17%');
+    expect(screen.getByText('Investigating: 2 incidents, 17%.')).toBeInTheDocument();
+    await userEvent.keyboard('{ArrowLeft}{ArrowLeft}');
+    expect(ring).toHaveTextContent('3Closed · 25%'); // wraps around
+    await userEvent.keyboard('{Escape}');
+    expect(ring).toHaveTextContent('12incidents in total');
+  });
+
+  it('leaves empty statuses out of the ring but keeps them in the legend', async () => {
+    mockApi(() => jsonResponse(200, summary({
+      by_status: [{ status: 'open', count: 5 }, { status: 'investigating', count: 0 }, { status: 'resolved', count: 0 }, { status: 'closed', count: 0 }],
+    })));
+    renderAt('/dashboard');
+    await screen.findByRole('list', { name: 'Incidents by status' });
+    expect(document.querySelectorAll('.donut-segment')).toHaveLength(1);
+    expect(screen.getByRole('list', { name: 'Incidents by status' })).toHaveTextContent('Investigating0 · 0%');
+  });
+
+  it('colours severity bars by severity while each row is named', async () => {
+    mockApi(() => jsonResponse(200, summary()));
+    renderAt('/dashboard');
+    const severity = await screen.findByRole('list', { name: 'Incidents by severity' });
+    expect(within(severity).getByText('Critical').closest('li')).toHaveTextContent('1 · 8%');
+    expect([...severity.querySelectorAll('.meter-fill')].map(f => f.className)).toEqual([
+      'meter-fill tone-sev-low', 'meter-fill tone-sev-medium', 'meter-fill tone-sev-high', 'meter-fill tone-sev-critical',
+    ]);
+  });
+
+  it('shows a reporter their own figures without staff-only escalations', async () => {
+    const own = summary({ scope: 'own', totals: { incidents: 2, open: 1, resolved_or_closed: 1 }, sla: { ...summary().sla, escalations: null } });
+    mockApi(() => jsonResponse(200, own), { user: makeUser('reporter') });
+    renderAt('/dashboard');
+    expect(await screen.findByRole('heading', { name: 'My dashboard' })).toBeInTheDocument();
+    await screen.findByText('Incidents in range'); // the heading renders before the figures arrive
+    expect(tileValue('Incidents in range')).toBe('2');
+    expect(tileValue('Resolved or closed')).toBe('1');
+    expect(within(screen.getByRole('region', { name: 'SLA' })).queryByText('Escalations')).toBeNull();
   });
 
   it('offers the trend as an accessible chart, keyboard readout and table', async () => {

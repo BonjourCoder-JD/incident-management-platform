@@ -13,6 +13,7 @@ import { LoginPage } from './pages/LoginPage';
 import { SlaPolicyPage } from './pages/SlaPolicyPage';
 import { UsersPage } from './pages/UsersPage';
 import { Link, useLocation, type Route } from './router';
+import { useTheme } from './theme';
 
 type ApiStatus = 'checking' | 'connected' | 'unavailable';
 
@@ -36,6 +37,38 @@ function ApiStatusIndicator() {
       <span className="api-status-dot" aria-hidden="true" />
       {API_STATUS_LABELS[status]}
     </p>
+  );
+}
+
+/** Switches between light and dark. Follows the operating system until the viewer chooses. */
+function ThemeToggle() {
+  const { theme, chosen, setTheme } = useTheme();
+  const dark = theme === 'dark';
+  return (
+    <>
+    <button
+      type="button"
+      className="button button-ghost button-small theme-toggle"
+      aria-pressed={dark}
+      aria-describedby="theme-toggle-source"
+      onClick={() => setTheme(dark ? 'light' : 'dark')}
+    >
+      <svg className="theme-toggle-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+        {dark ? (
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" fill="currentColor" />
+        ) : (
+          <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+          </g>
+        )}
+      </svg>
+      Dark theme
+    </button>
+    <span id="theme-toggle-source" className="visually-hidden">
+      {chosen ? 'Your choice is saved in this browser.' : 'Following your system setting.'}
+    </span>
+    </>
   );
 }
 
@@ -94,6 +127,7 @@ function Layout({ user, children }: { user?: User; children: ReactNode }) {
             )}
           </div>
           <div className="app-header-end">
+            <ThemeToggle />
             <ApiStatusIndicator />
             {user && <UserMenu user={user} />}
           </div>

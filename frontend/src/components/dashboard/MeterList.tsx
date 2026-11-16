@@ -7,6 +7,8 @@ export interface MeterRow {
   display?: string;
   /** Optional second line, e.g. "3 resolved". */
   note?: string;
+  /** CSS class for the bar colour (e.g. a severity tone); the row's name always says what it is. */
+  tone?: string;
 }
 
 /**
@@ -25,8 +27,8 @@ export function MeterList({ rows, total, label }: { rows: MeterRow[]; total?: nu
         return (
           <li key={row.label} className="meter-row">
             <span className="meter-name">{row.label}</span>
-            <span className="meter-track" aria-hidden="true">
-              {width > 0 && <span className="meter-fill" style={{ width: `${Math.max(width, 1.5)}%` }} />}
+            <span className={`meter-track${row.tone ? ' meter-track-neutral' : ''}`} aria-hidden="true">
+              {width > 0 && <span className={`meter-fill${row.tone ? ` ${row.tone}` : ''}`} style={{ width: `${Math.max(width, 1.5)}%` }} />}
             </span>
             <span className="meter-figure">
               <strong>{figure}</strong>

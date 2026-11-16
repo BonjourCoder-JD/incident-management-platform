@@ -104,6 +104,17 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await expectNoBlockingViolations(page, 'triage decision and rate-limit message');
     });
 
+    test('dashboard with the opposite theme chosen in the header and the donut in focus', async ({ page }) => {
+      await signIn(page, bootstrapAdmin());
+      await page.goto('/dashboard');
+      await expect(page.locator('.kpi-row .stat-tile').first()).toBeVisible();
+      await page.getByRole('button', { name: 'Dark theme' }).click(); // the explicit data-theme path, not the OS one
+      const expected = colorScheme === 'light' ? 'dark' : 'light';
+      expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe(expected);
+      await page.getByRole('img', { name: /^Incidents by status:/ }).focus();
+      await expectNoBlockingViolations(page, `dashboard (${expected} chosen)`);
+    });
+
     test('dashboard, users and account pages', async ({ page }) => {
       await signIn(page, bootstrapAdmin());
       await page.goto('/dashboard');
@@ -161,3 +172,29 @@ test.describe('Phone width (390 px), admin pages', () => {
     expect(await hasNoHorizontalScroll(page), '/sla scrolls horizontally').toBe(true);
   });
 });
+
+for (const width of [768, 1024, 1280]) {
+  test.describe(`Width ${width} px`, () => {
+    test.use({ viewport: { width, height: 900 } });
+
+    test('the dashboard and main pages fit without horizontal scrolling', async ({ page }) => {
+      await signIn(page, bootstrapAdmin());
+      const pages: [string, () => Promise<void>][] = [
+        ['/dashboard', () => expect(page.locator('.kpi-row .stat-tile')).toHaveCount(5)],
+        ['/dashboard?range=12m', () => expect(page.getByRole('list', { name: 'Incidents by status' })).toBeVisible()],
+        ['/', () => expect(page.getByRole('button', { name: /Export CSV/ })).toBeVisible()],
+        [`/incidents/${slaScenario.overdueId}`, () => expect(page.getByRole('region', { name: 'SLA' })).toBeVisible()],
+        ['/sla', () => expect(page.getByRole('table', { name: 'Current SLA targets' })).toBeVisible()],
+      ];
+      for (const [path, ready] of pages) {
+        await page.goto(path);
+        await ready();
+        expect(await hasNoHorizontalScroll(page), `${path} scrolls horizontally at ${width} px`).toBe(true);
+      }
+      // Every headline card is fully inside the viewport.
+      await page.goto('/dashboard');
+      const boxes = await page.locator('.kpi-row .stat-tile').evaluateAll(tiles => tiles.map(t => t.getBoundingClientRect().right));
+      expect(Math.max(...boxes)).toBeLessThanOrEqual(width);
+    });
+  });
+}

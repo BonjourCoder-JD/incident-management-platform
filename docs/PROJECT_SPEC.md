@@ -134,6 +134,20 @@ Browser ──► Vite dev server (frontend, :5173) ──/api/* proxy──► 
 - **Not added:** a `(reporter_id, created_at)` index (the planner used it, but it changed timings by about 1 ms either way, so the existing `ix_incidents_reporter_id` is kept), and a time-ordered resolution index (never chosen by the planner).
 - **Query restructuring mattered more than indexes:** the first design recomputed first resolutions in four separate queries (staff: 211 ms for 30 days, 400 ms for 366 days); computing the cohort once with `GROUPING SETS`, scanning only in-range resolution events and replacing repeated per-row legacy checks brought staff to the figures above.
 
+### Dashboard and theme design (Milestone 5D)
+
+Approved 2026-11-16 (plan with decisions: donut with an exact-count legend, a manual theme toggle, "SLA overdue now" as the fifth figure, the blue-gray background on every page). Frontend only: no backend, API, migration or dependency changes; every figure comes from `GET /analytics/summary`.
+
+| Topic | Decision | Notes and limits |
+|---|---|---|
+| Headline figures | Five cards: incidents in range, open backlog now, resolved or closed, median time to resolve, SLA overdue now. Each says in text whether it covers the **selected dates** or is **right now**, and carries a blue, orange, green, purple or red accent with a decorative icon. | Reporters see their own incidents only (server scope, unchanged). |
+| Charts | Created-versus-resolved trend (unchanged component: keyboard readout, tooltip, table view); status donut; severity bars; SLA panel with on-time rates, overdue and approaching counts and staff-only escalations; current backlog and resolution times. | No chart library: hand-written SVG and HTML. |
+| Status donut | Four segments with surface gaps; the legend beside it always lists each status with its exact count and share; the ring is focusable and arrow keys read each segment (centre readout and a polite status message); a summary label gives every value. | Colours are reference-palette slots (open blue, investigating orange, resolved aqua, closed yellow), ordered so every neighbouring pair including the wrap passes the colour-vision checks (worst ΔE 8.4) and 3:1 contrast in both themes. The badge tones were rejected: blue and purple are 2.0 apart for deuteranopia. |
+| Severity bars | Named rows with count and share; bars use the severity badge tones, so a severity looks the same everywhere. | Every bar is at least 3:1 against the card and its track in both themes. |
+| Theme | `light-dark()` colour tokens with `color-scheme: light dark`: the operating-system theme applies until the viewer presses **Dark theme** in the header (a toggle button with its state and a description of where the choice comes from). The choice is stored in this browser (`localStorage`, key `imp-theme`) and applied as `data-theme` on `<html>` before the first render. | Storage failures are tolerated (the choice applies to the page). No inline script, so a future Content Security Policy needs no exception. |
+| Layout | Five cards in a row at 1,280 px; 3 + 2 at 1,024 px; 2 columns at 768 px and 390 px, with the fifth card full width. Trend beside the donut; severity and current backlog stacked beside the SLA panel; resolution times full width. Page container widened from 1,120 to 1,240 px so the header fits on one row. | No horizontal scrolling at 390, 768, 1,024 or 1,280 px (end-to-end checks). |
+| Light background | `#eef2f7` on every page in the light theme; muted text stays 5.3:1 on it. | Dark theme unchanged in its values, now also selectable explicitly. |
+
 ### CSV export design (Milestone 4)
 
 `GET /exports/incidents.csv?severity=&status=` (approved path; it avoids the dynamic `/incidents/{incident_id}` route).
@@ -323,6 +337,40 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 ---
 
 ## Completed functionality
+
+### Milestone 5D — Dashboard UI/UX redesign
+
+**Not yet released.** Implemented locally on 2026-11-16; every item below is **Verified (local)** until the feature commit passes CI.
+
+Design: *Dashboard and theme design*.
+
+| Functionality | Status | Evidence |
+|---|---|---|
+| Five headline figures from the analytics response, each labelled "Selected dates" or "Right now", with fixed accents and decorative icons | **Verified (local)** | `frontend/src/pages/DashboardPage.test.tsx`; `e2e/tests/dashboard.spec.ts` (every figure compared with the response the page received) |
+| Status donut: legend with exact counts and shares, empty statuses kept in the legend and left out of the ring, keyboard reading with wrap-around, summary label | **Verified (local)** | `DashboardPage.test.tsx`; `dashboard.spec.ts` |
+| Severity bars coloured by severity with named rows; SLA panel with on-time rates, overdue counts and staff-only escalations | **Verified (local)** | `DashboardPage.test.tsx`, `IncidentListSla.test.tsx`; `dashboard.spec.ts` |
+| Role-specific figures: a reporter sees only their own incidents and never escalations | **Verified (local)** | `DashboardPage.test.tsx`; `dashboard.spec.ts` |
+| Presets, custom range validation, URL persistence, trend keyboard readout and table view unchanged | **Verified (local)** | existing unit and end-to-end tests, unchanged and passing |
+| Theme: follows the operating system until chosen; keyboard-operable toggle with state; choice stored per browser, restored before the first render, overriding the operating system both ways; unknown stored values ignored; works without storage or `matchMedia` | **Verified (local)** | `frontend/src/theme.test.tsx` (5 tests); `e2e/tests/theme.spec.ts` (2 tests, computed page colours) |
+| Accessibility: axe WCAG 2.1 A/AA scans of every page in both operating-system themes, plus the dashboard with the opposite theme chosen in the header and the donut focused; zero serious or critical violations | **Verified (local)** | `e2e/tests/accessibility.spec.ts` |
+| Responsive: no horizontal scrolling on the dashboard and main pages at 390, 768, 1,024 and 1,280 px; every headline card inside the viewport | **Verified (local)** | `accessibility.spec.ts` (3 new width tests; the 390 px test already covered the dashboard) |
+| Colour checks: chart palettes validated with the dataviz validator in both themes; every new graphic pairing at least 3:1 and text at least 4.5:1 (computed) | **Verified (local)** | see *Colour checks* below |
+
+**Results (local, 2026-11-16):** frontend **168 passed** (158 before; 10 new), type check and production build clean; backend **509 passed** (unchanged; no backend changes); end to end **69 tests** (61 before; 8 new): **three consecutive runs, 69/69 each**, on freshly built disposable stacks, with `sla-verify` consistent before and after. The Docker volume list matched the baseline before and after (an interrupted earlier run had left `imp-e2e_postgres_data`, which the runner removed after confirming it belonged to the end-to-end project).
+
+**Colour checks:** the status badge tones failed as a chart palette (blue and purple ΔE 2.0 for deuteranopia; grey below the chroma floor), so the donut uses reference-palette slots. Light-mode aqua and yellow were 2.82:1 and 2.17:1 on white; the palette's documented deeper steps (`#199e70`, `#c98500`) pass every check in both themes (worst neighbouring ΔE 8.4, contrast at least 3:1). Accents, icons on their tints, severity bars on cards and tracks: at least 4.57:1 in dark and at least 3:1 in light.
+
+**Screenshot review** (both themes at 390, 768, 1,024 and 1,280 px, the reporter view, the focused donut): two layout defects were found and fixed before the final runs. At 1,280 px the header wrapped onto two rows once the theme toggle was added (container widened to 1,240 px), and the SLA panel's fourth tile wrapped, leaving the severity card mostly empty (severity and backlog now stack beside the SLA panel; SLA tiles fit four to a row). At 390 and 768 px the fifth card now spans the row instead of standing alone. Unchanged and noted: the trend chart's y-axis rounds up to the next "nice" maximum (40 for a peak of 12), as before.
+
+**Performance:** no new requests (one analytics request per range, as before) and no new dependencies. Production bundle: JavaScript 326.8 kB (95.8 → 98.3 kB gzipped, +2.5 kB), CSS 27.5 kB (5.4 → 6.2 kB gzipped). The donut is static SVG; the only motion is a 0.12 s segment emphasis, disabled under reduced motion.
+
+**Deliberate-break checks** (scratch copies; each disabled one protection): frontend 11 variants — wrong field behind a headline figure, scope label missing, donut legend without counts, donut not keyboard-operable, donut without a text alternative, escalations shown to reporters, severity bars uncoloured, theme not persisted, operating-system theme ignored, stored theme not restored, trend table removed: **11 caught**. End to end 2 variants — wrong headline field, theme not persisted: **2 caught**. The wrong-field variant first survived end to end, because every end-to-end incident is created inside the default range; the reporter test now also opens a range before any incident (backlog still 1, range figures 0).
+
+**Deviations from the approved plan, recorded:**
+- **Theme toggle added** (decision 2, not in the original plan): `src/theme.ts`, a header button and `light-dark()` tokens replacing the media-query block.
+- **Donut colours** are chart-palette slots, not the badge tones (failed the colour-vision check).
+- **Layout:** the page container is 1,240 px instead of 1,120 px on every page; current backlog moved beside the SLA panel.
+- **Documentation fix:** the roadmap table still listed 5C as Planned after its release; corrected here.
 
 ### Milestone 5C — AI-assisted incident triage
 
@@ -689,6 +737,8 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 | ISSUE-26 | Candidate search and the fake provider are English-only (English text-search configuration and keywords). | Non-English reports get fewer candidates and keyword-based test suggestions. | Evaluate the real model on the mixed-language cases; consider the `simple` configuration. |
 | ISSUE-27 | Recorded costs are estimates (reported tokens × configured prices), not billing data; calls with unknown billing, including rate-limited ones, are charged their full reservation. | Budgets over-count, never under-count. | Reconcile with provider billing in Milestone 6 if needed. |
 | ISSUE-28 | Triage settings are read at start-up, and the budget lock serialises all reservations across the application. | Changing limits needs a restart; reservation throughput is bounded (one short transaction at a time). | Acceptable at demonstration scale; revisit with shared rate limiting (ISSUE-7). |
+| ISSUE-29 | Colour tokens use CSS `light-dark()` (Chrome and Edge 123+, Firefox 120+, Safari 17.5+). | Older browsers would show the pages without colours. | Acceptable for current browsers; add fallback values in Milestone 6 if older browsers must be supported. |
+| ISSUE-30 | The theme choice is stored per browser only, and a page load shows the operating-system theme until the script runs (a brief flash when the stored choice differs). | Minor; no data involved. | Milestone 6: consider an inline, hashed theme script once the Content Security Policy exists. |
 
 ---
 
@@ -704,7 +754,8 @@ Milestones are delivered in order, each as a small, separately approved change w
 | 5 | Permanent Playwright end-to-end tests in GitHub Actions | **Complete** (`13d3c34`, `7e65e81`, `dea4ba7`) |
 | 5A | Incident comments and internal-only responder notes | **Complete** (`ddc571e`) |
 | 5B | SLA tracking, response/resolution deadlines, overdue indicators and escalation | **Complete** (`d0ea3e8`) |
-| 5C | AI-assisted incident triage with human approval | Planned |
+| 5C | AI-assisted incident triage with human approval | **Complete** (`4a216d7`) |
+| 5D | Dashboard UI/UX redesign with a light/dark theme toggle | Implemented locally, awaiting review (not released) |
 | 6 | Production hardening, observability, monitoring and deployment | Planned |
 | — | Final presentation: live demo, sample data, screenshots, architecture diagram, README, 60–90 s walkthrough | Planned |
 
@@ -822,6 +873,17 @@ Implemented as described in *AI triage design*; evidence under *Completed functi
 - [x] Data minimisation: only fields needed for triage are sent; reporters cannot see staff-only data through suggestions; visibility rules apply to duplicate detection. *(CI run 43784327150 passed.)*
 - [x] Timeouts, rate limits and a cost ceiling; failures degrade gracefully to manual triage. *(CI run 43784327150 passed.)*
 - [x] Evaluation results recorded in this document; CI uses the fake model only (no secrets or paid calls in CI). *(Fake provider only; the paid Haiku evaluation awaits approval, ISSUE-24. CI run 43784327150 passed.)*
+
+### Milestone 5D — Dashboard UI/UX redesign · Implemented locally, awaiting review (not released)
+
+A modern, accessible dashboard on the existing analytics API, and a light/dark theme toggle. Implemented as described in *Dashboard and theme design*; evidence under *Completed functionality* (Verified (local)).
+
+**Acceptance criteria**
+- [ ] Five headline figures from real data, labelled by date range or current state; reporters see their own incidents only.
+- [ ] Presets, custom range, URL persistence, trend chart and table unchanged.
+- [ ] Trend, status donut and severity bars with labels, keyboard access and text alternatives; SLA rates, overdue counts and staff-only escalations.
+- [ ] Validated colours and zero serious or critical axe violations in both themes; theme choice persisted per browser.
+- [ ] No horizontal scrolling at 390, 768, 1,024 and 1,280 px; no backend, API or dependency changes; all suites pass in CI.
 
 ### Milestone 6 — Production hardening, observability, monitoring and deployment · Planned
 

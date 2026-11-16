@@ -1,9 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError, getAnalyticsSummary } from '../api/client';
 import type { AnalyticsParams, AnalyticsSummary } from '../api/types';
+import { DonutChart } from '../components/dashboard/DonutChart';
 import { MeterList } from '../components/dashboard/MeterList';
 import { SlaSummary } from '../components/dashboard/SlaSummary';
 import { StatTile } from '../components/dashboard/StatTile';
+import { STATUS_TONES, SEVERITY_TONES } from '../components/dashboard/tones';
 import { TrendChart } from '../components/dashboard/TrendChart';
 import { formatCount, formatDay, formatHours } from '../components/dashboard/format';
 import { permissions, useCurrentUser } from '../auth';
@@ -164,89 +166,106 @@ export function DashboardPage({ search }: { search: URLSearchParams }) {
 }
 
 function DashboardContent({ data, refreshing, onWiden }: { data: AnalyticsSummary; refreshing: boolean; onWiden: () => void }) {
-  const { totals, resolution } = data;
+  const { totals, resolution, sla } = data;
   const backlogTotal = data.open_backlog_by_severity.reduce((sum, row) => sum + row.count, 0);
+  const overdueNow = sla.overdue_by_severity.reduce((sum, row) => sum + row.count, 0);
+  const approachingNow = sla.approaching_by_severity.reduce((sum, row) => sum + row.count, 0);
   const empty = totals.incidents === 0 && resolution.resolved_count === 0 && resolution.excluded_legacy === 0;
+  // Current state, whatever the dates: shown beside the severity chart, or on its own when the range is empty.
+  const backlog = (
+    <section className="card" aria-labelledby="backlog-heading">
+      <h2 id="backlog-heading">Current open backlog</h2>
+      <p className="muted small card-caption">Open or investigating right now, whatever the dates above · {formatCount(backlogTotal)} in total</p>
+      <MeterList label="Current open backlog by severity" total={backlogTotal}
+        rows={data.open_backlog_by_severity.map(row => ({ label: SEVERITY_LABELS[row.severity], value: row.count, tone: SEVERITY_TONES[row.severity] }))} />
+    </section>
+  );
 
   return (
     <div className={`dashboard-content${refreshing ? ' refreshing' : ''}`} aria-busy={refreshing}>
       {refreshing && <p className="visually-hidden" role="status">Updating figures…</p>}
 
-      <div className="stat-row">
-        <StatTile label="Incidents in range" value={formatCount(totals.incidents)} detail="Created in the selected dates" />
-        <StatTile label="Still open" value={formatCount(totals.open)} detail="Of those, open or investigating" />
-        <StatTile label="Resolved or closed" value={formatCount(totals.resolved_or_closed)} detail="Of those, by current status" />
+      {/* "Selected dates" figures follow the range above; "Right now" figures ignore it. */}
+      <div className="stat-row kpi-row">
+        <StatTile label="Incidents in range" value={formatCount(totals.incidents)} accent="blue" icon="incidents" scope="Selected dates"
+          detail="Created in the selected dates" />
+        <StatTile label="Open backlog now" value={formatCount(backlogTotal)} accent="orange" icon="backlog" scope="Right now"
+          detail={`Open or investigating, any creation date · ${formatCount(totals.open)} of them created in range`} />
+        <StatTile label="Resolved or closed" value={formatCount(totals.resolved_or_closed)} accent="green" icon="resolved" scope="Selected dates"
+          detail="Of the incidents created in range, by current status" />
         <StatTile
           label="Median time to resolve"
           value={resolution.median_hours === null ? '—' : formatHours(resolution.median_hours)}
+          accent="purple" icon="duration" scope="Selected dates"
           detail={resolution.resolved_count === 0 ? 'No incidents first resolved in range' : `${formatCount(resolution.resolved_count)} first resolved in range`}
         />
+        <StatTile label="SLA overdue now" value={formatCount(overdueNow)} accent="red" icon="overdue" scope="Right now"
+          detail={`Open incidents past an SLA deadline · ${formatCount(approachingNow)} approaching`} />
       </div>
 
       {empty ? (
-        <div className="card state state-empty">
-          <p className="state-title">No incidents in this range</p>
-          <p className="muted">Try a longer period to see trends.</p>
-          <button type="button" className="button button-secondary" onClick={onWiden}>Show the last 12 months</button>
-        </div>
-      ) : (
         <>
-          <section className="card" aria-labelledby="trend-heading">
+          <div className="card state state-empty">
+            <p className="state-title">No incidents in this range</p>
+            <p className="muted">Try a longer period to see trends.</p>
+            <button type="button" className="button button-secondary" onClick={onWiden}>Show the last 12 months</button>
+          </div>
+          <div className="dashboard-grid">
+            {backlog}
+            <SlaSummary sla={sla} staff={data.scope === 'all'} />
+          </div>
+        </>
+      ) : (
+        <div className="dashboard-charts">
+          <section className="card chart-card chart-card-wide" aria-labelledby="trend-heading">
             <h2 id="trend-heading">Created and resolved per {data.range.bucket === 'day' ? 'day' : 'week'}</h2>
+            <p className="muted small card-caption">Selected dates · incidents created, and incidents first resolved or closed</p>
             <TrendChart points={data.trend} bucket={data.range.bucket} />
           </section>
-
-          <div className="dashboard-grid">
-            <section className="card" aria-labelledby="status-breakdown-heading">
-              <h2 id="status-breakdown-heading">By current status</h2>
-              <p className="muted small card-caption">Incidents created in the selected dates</p>
-              <MeterList label="Incidents by status" total={totals.incidents}
-                rows={data.by_status.map(row => ({ label: STATUS_LABELS[row.status], value: row.count }))} />
-            </section>
-            <section className="card" aria-labelledby="severity-breakdown-heading">
+          <section className="card chart-card" aria-labelledby="status-breakdown-heading">
+            <h2 id="status-breakdown-heading">By current status</h2>
+            <p className="muted small card-caption">Incidents created in the selected dates</p>
+            <DonutChart label="Incidents by status" unit="incidents"
+              segments={data.by_status.map(row => ({ key: row.status, label: STATUS_LABELS[row.status], value: row.count, tone: STATUS_TONES[row.status] }))} />
+          </section>
+          <div className="chart-stack">
+            <section className="card chart-card" aria-labelledby="severity-breakdown-heading">
               <h2 id="severity-breakdown-heading">By severity</h2>
               <p className="muted small card-caption">Incidents created in the selected dates</p>
               <MeterList label="Incidents by severity" total={totals.incidents}
-                rows={data.by_severity.map(row => ({ label: SEVERITY_LABELS[row.severity], value: row.count }))} />
+                rows={data.by_severity.map(row => ({ label: SEVERITY_LABELS[row.severity], value: row.count, tone: SEVERITY_TONES[row.severity] }))} />
             </section>
+            {backlog}
           </div>
-        </>
+          <div className="chart-card-wide">
+            <SlaSummary sla={sla} staff={data.scope === 'all'} />
+          </div>
+        </div>
       )}
 
-      <div className="dashboard-grid">
-        <section className="card" aria-labelledby="backlog-heading">
-          <h2 id="backlog-heading">Current open backlog</h2>
-          <p className="muted small card-caption">Open or investigating right now, whatever the dates above · {formatCount(backlogTotal)} in total</p>
-          <MeterList label="Current open backlog by severity" total={backlogTotal}
-            rows={data.open_backlog_by_severity.map(row => ({ label: SEVERITY_LABELS[row.severity], value: row.count }))} />
-        </section>
-
-        <section className="card" aria-labelledby="resolution-heading">
-          <h2 id="resolution-heading">Time to first resolution</h2>
-          <p className="muted small card-caption">Incidents first resolved or closed in the selected dates, measured from the audit trail</p>
-          <dl className="resolution-figures">
-            <div><dt>Median</dt><dd>{formatHours(resolution.median_hours)}</dd></div>
-            <div><dt>90th percentile</dt><dd>{formatHours(resolution.p90_hours)}</dd></div>
-            <div><dt>Resolved</dt><dd>{formatCount(resolution.resolved_count)}</dd></div>
-            <div><dt>Later reopened</dt><dd>{formatCount(resolution.reopened_count)}</dd></div>
-          </dl>
-          <MeterList label="Median time to resolve by severity"
-            rows={resolution.by_severity.map(row => ({
-              label: SEVERITY_LABELS[row.severity],
-              value: row.median_hours ?? 0,
-              display: formatHours(row.median_hours),
-              note: `${formatCount(row.resolved_count)} resolved`,
-            }))} />
-          {resolution.excluded_legacy > 0 && (
-            <p className="coverage-note muted small">
-              {formatCount(resolution.excluded_legacy)} incident{resolution.excluded_legacy === 1 ? ' was' : 's were'} resolved in this range
-              but created before audit logging began, so {resolution.excluded_legacy === 1 ? 'it is' : 'they are'} not included in resolution times.
-            </p>
-          )}
-        </section>
-      </div>
-
-      <SlaSummary sla={data.sla} staff={data.scope === 'all'} />
+      <section className="card" aria-labelledby="resolution-heading">
+        <h2 id="resolution-heading">Time to first resolution</h2>
+        <p className="muted small card-caption">Incidents first resolved or closed in the selected dates, measured from the audit trail</p>
+        <dl className="resolution-figures">
+          <div><dt>Median</dt><dd>{formatHours(resolution.median_hours)}</dd></div>
+          <div><dt>90th percentile</dt><dd>{formatHours(resolution.p90_hours)}</dd></div>
+          <div><dt>Resolved</dt><dd>{formatCount(resolution.resolved_count)}</dd></div>
+          <div><dt>Later reopened</dt><dd>{formatCount(resolution.reopened_count)}</dd></div>
+        </dl>
+        <MeterList label="Median time to resolve by severity"
+          rows={resolution.by_severity.map(row => ({
+            label: SEVERITY_LABELS[row.severity],
+            value: row.median_hours ?? 0,
+            display: formatHours(row.median_hours),
+            note: `${formatCount(row.resolved_count)} resolved`,
+          }))} />
+        {resolution.excluded_legacy > 0 && (
+          <p className="coverage-note muted small">
+            {formatCount(resolution.excluded_legacy)} incident{resolution.excluded_legacy === 1 ? ' was' : 's were'} resolved in this range
+            but created before audit logging began, so {resolution.excluded_legacy === 1 ? 'it is' : 'they are'} not included in resolution times.
+          </p>
+        )}
+      </section>
     </div>
   );
 }

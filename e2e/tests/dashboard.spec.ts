@@ -39,17 +39,65 @@ test.describe('Analytics dashboard', () => {
     await expect(page.getByRole('heading', { name: 'My dashboard' })).toBeVisible();
     await expect(page.getByText('Figures cover only the incidents you reported.')).toBeVisible();
     await expect(tile(page, 'Incidents in range')).toHaveText('3');
-    await expect(tile(page, 'Still open')).toHaveText('1');
+    await expect(tile(page, 'Open backlog now')).toHaveText('1');
+    await expect(page.locator('.stat-tile', { hasText: 'Open backlog now' })).toContainText('Right now');
+    await expect(page.locator('.stat-tile', { hasText: 'Incidents in range' })).toContainText('Selected dates');
     await expect(tile(page, 'Resolved or closed')).toHaveText('2');
     await expect(page.locator('.stat-tile', { hasText: 'Median time to resolve' })).toContainText('2 first resolved in range');
     const backlog = page.getByRole('region', { name: 'Current open backlog' });
     await expect(backlog).toContainText('1 in total');
     await expect(backlog.getByRole('listitem').filter({ hasText: 'Critical' })).toContainText('1');
+    const status = page.getByRole('list', { name: 'Incidents by status' });
+    await expect(status.getByRole('listitem')).toHaveText(['Open1 · 33%', 'Investigating0 · 0%', 'Resolved1 · 33%', 'Closed1 · 33%']);
+    // Escalations are staff-only, in the API and on the page.
+    await expect(page.getByRole('region', { name: 'SLA' }).getByText('Escalations')).toHaveCount(0);
+
+    // "Right now" figures ignore the dates: a range before any incident keeps the current backlog.
+    await openDashboard(page, '?from=2001-01-01&to=2001-01-31');
+    await expect(tile(page, 'Incidents in range')).toHaveText('0');
+    await expect(tile(page, 'Open backlog now')).toHaveText('1');
+    await expect(page.locator('.stat-tile', { hasText: 'Open backlog now' })).toContainText('0 of them created in range');
 
     await openDashboard(pageB);
     await expect(tile(pageB, 'Incidents in range')).toHaveText('2');
     await expect(tile(pageB, 'Resolved or closed')).toHaveText('0');
     await pageB.close();
+  });
+
+  test('every headline figure and chart entry matches the analytics API for staff', async ({ page, makeUser }) => {
+    await signIn(page, await makeUser('responder'));
+    // Compare with the exact response the page rendered (other tests add incidents in parallel).
+    const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/analytics/summary' && r.ok());
+    await openDashboard(page);
+    const summary = await (await response).json();
+    const sum = (rows: { count: number }[]) => rows.reduce((total, row) => total + row.count, 0);
+    const n = (value: number) => value.toLocaleString();
+    await expect(tile(page, 'Incidents in range')).toHaveText(n(summary.totals.incidents));
+    await expect(tile(page, 'Open backlog now')).toHaveText(n(sum(summary.open_backlog_by_severity)));
+    await expect(tile(page, 'Resolved or closed')).toHaveText(n(summary.totals.resolved_or_closed));
+    await expect(tile(page, 'SLA overdue now')).toHaveText(n(sum(summary.sla.overdue_by_severity)));
+    const status = page.getByRole('list', { name: 'Incidents by status' });
+    for (const row of summary.by_status as { status: string; count: number }[]) {
+      const label = row.status[0].toUpperCase() + row.status.slice(1);
+      await expect(status.getByRole('listitem').filter({ hasText: label })).toContainText(n(row.count));
+    }
+    const severity = page.getByRole('list', { name: 'Incidents by severity' });
+    for (const row of summary.by_severity as { severity: string; count: number }[]) {
+      const label = row.severity[0].toUpperCase() + row.severity.slice(1);
+      await expect(severity.getByRole('listitem').filter({ hasText: label })).toContainText(n(row.count));
+    }
+    await expect(page.getByRole('region', { name: 'SLA' }).locator('.stat-tile', { hasText: 'Escalations' }).locator('.stat-value'))
+      .toHaveText(n(summary.sla.escalations));
+
+    // The donut is keyboard-readable.
+    const ring = page.getByRole('img', { name: /^Incidents by status:/ });
+    await ring.focus();
+    await expect(ring).toContainText(/(Open|Investigating|Resolved|Closed) · \d+%/);
+    const first = await ring.textContent();
+    await page.keyboard.press('ArrowRight');
+    if (summary.by_status.filter((row: { count: number }) => row.count > 0).length > 1) await expect(ring).not.toHaveText(first!);
+    await page.keyboard.press('Escape');
+    await expect(ring).toContainText('incidents in total');
   });
 
   test('staff dashboards leave legacy incidents out of resolution times and say so', async ({ page, makeUser }) => {
