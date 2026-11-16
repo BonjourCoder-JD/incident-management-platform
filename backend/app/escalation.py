@@ -143,6 +143,10 @@ def run_escalations(bind: Engine | Connection | None = None, now: datetime | Non
             logger.info("SLA escalation run: %d checked, %d recorded, %d skipped", run.checked, run.recorded, run.skipped)
             return run
         finally:
+            if owns_connection:
+                # After a failed statement the transaction is aborted and would refuse the unlock, hiding
+                # the original error; rolling back keeps the session-level advisory lock until unlocked.
+                conn.rollback()
             conn.execute(select(func.pg_advisory_unlock(SLA_WORKER_LOCK)))
             if owns_connection:
                 conn.commit()

@@ -358,3 +358,19 @@ def test_policy_change_waits_for_in_flight_incident_writes():
             policy.join(15)
         assert created["at"] > write_started
         assert created["at"].timestamp() >= committed_at - 1
+
+
+def test_a_failed_run_reports_its_own_error_and_releases_the_lock(monkeypatch):
+    """A database error during a run (seen when migrations had not been applied) must surface as itself,
+    not as a failed unlock in the aborted transaction, and must release the worker lock."""
+    from app import escalation
+
+    def broken(conn, now, limit):
+        conn.execute(text("SELECT * FROM table_that_does_not_exist"))
+    monkeypatch.setattr(escalation, "due_targets", broken)
+    with pytest.raises(DBAPIError, match="table_that_does_not_exist"):
+        run_escalations(engine)
+    with engine.connect() as probe:
+        assert probe.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": SLA_WORKER_LOCK}).scalar_one() is True
+        probe.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": SLA_WORKER_LOCK})
+        probe.commit()
