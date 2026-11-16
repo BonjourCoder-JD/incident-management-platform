@@ -1,6 +1,6 @@
 # Project Specification — Security Incident Management Platform
 
-Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed · Milestone 4 (secure CSV export) complete — commit `02eba64`, CI run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) passed · Milestone 5 (end-to-end tests) complete — commits `13d3c34`, `7e65e81`, `dea4ba7`, CI run [43726750357](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43726750357) passed (all five jobs) · Milestone 5B (SLA tracking and escalation) complete — commit `d0ea3e8`, CI run [43766899182](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43766899182) passed (all five jobs) · Milestone 5A (comments and internal notes) complete — commit `ddc571e`, CI run [43749980036](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43749980036) passed (all five jobs) · Milestone 5C (AI-assisted triage) complete — commit `4a216d7`, CI run [43784327150](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43784327150) passed (all five jobs) · Roadmap expanded on 2026-11-15 (Milestones 5, 5A, 5B, 5C, 6 and a final presentation, all **Planned**)
+Last updated: 2026-11-15 · Milestone 1 (authentication and RBAC) complete — commit `1ae693b`, CI run [43668840665](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43668840665) passed · Milestone 2 (audit trail) complete — commits `7838f9c` + `ec3ed2e`, CI run [43672524737](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43672524737) passed · Milestone 3 (analytics dashboard) complete — commit `7240e3a`, CI run [43714418907](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43714418907) passed · Milestone 4 (secure CSV export) complete — commit `02eba64`, CI run [43717432124](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43717432124) passed · Milestone 5 (end-to-end tests) complete — commits `13d3c34`, `7e65e81`, `dea4ba7`, CI run [43726750357](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43726750357) passed (all five jobs) · Milestone 5B (SLA tracking and escalation) complete — commit `d0ea3e8`, CI run [43766899182](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43766899182) passed (all five jobs) · Milestone 5A (comments and internal notes) complete — commit `ddc571e`, CI run [43749980036](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43749980036) passed (all five jobs) · Milestone 5C (AI-assisted triage) complete — commit `4a216d7`, CI run [43784327150](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43784327150) passed (all five jobs) · Milestone 5D (dashboard redesign) complete — commit `e3bc126`, CI run [43871416066](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43871416066) passed (all five jobs) · Roadmap expanded on 2026-11-15 (Milestones 5, 5A, 5B, 5C, 6 and a final presentation, all **Planned**)
 
 A full-stack application for reporting, triaging and resolving security incidents. It is intended to be employer-ready: working end to end, tested automatically, secure by default, and documented.
 
@@ -340,23 +340,25 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 
 ### Milestone 5D — Dashboard UI/UX redesign
 
-**Not yet released.** Implemented locally on 2026-11-16; every item below is **Verified (local)** until the feature commit passes CI.
+Released on 2026-11-16 as `e3bc126e5f80609955f0e2eeebe73d92080efe32` (`feat: redesign the dashboard and add a light/dark theme toggle`, 18 files).
+
+**CI record:** run [43871416066](https://github.com/BonjourCoder-JD/incident-management-platform/actions/runs/43871416066) on `e3bc126`: **success** on the first attempt, all five jobs: Backend tests (101 s), Migration round trip (37 s), Frontend tests and build (36 s), Docker images (24 s), End-to-end tests (228 s; **69 passed** in 1.3 min of test time, from the job's annotation). Each job runs its complete suite; the backend (509) and frontend (168) totals are from local runs of the identical tree, because job logs cannot be downloaded without repository admin rights. Screenshot review, colour checks and bundle sizes are local observations.
 
 Design: *Dashboard and theme design*.
 
 | Functionality | Status | Evidence |
 |---|---|---|
-| Five headline figures from the analytics response, each labelled "Selected dates" or "Right now", with fixed accents and decorative icons | **Verified (local)** | `frontend/src/pages/DashboardPage.test.tsx`; `e2e/tests/dashboard.spec.ts` (every figure compared with the response the page received) |
-| Status donut: legend with exact counts and shares, empty statuses kept in the legend and left out of the ring, keyboard reading with wrap-around, summary label | **Verified (local)** | `DashboardPage.test.tsx`; `dashboard.spec.ts` |
-| Severity bars coloured by severity with named rows; SLA panel with on-time rates, overdue counts and staff-only escalations | **Verified (local)** | `DashboardPage.test.tsx`, `IncidentListSla.test.tsx`; `dashboard.spec.ts` |
-| Role-specific figures: a reporter sees only their own incidents and never escalations | **Verified (local)** | `DashboardPage.test.tsx`; `dashboard.spec.ts` |
-| Presets, custom range validation, URL persistence, trend keyboard readout and table view unchanged | **Verified (local)** | existing unit and end-to-end tests, unchanged and passing |
-| Theme: follows the operating system until chosen; keyboard-operable toggle with state; choice stored per browser, restored before the first render, overriding the operating system both ways; unknown stored values ignored; works without storage or `matchMedia` | **Verified (local)** | `frontend/src/theme.test.tsx` (5 tests); `e2e/tests/theme.spec.ts` (2 tests, computed page colours) |
-| Accessibility: axe WCAG 2.1 A/AA scans of every page in both operating-system themes, plus the dashboard with the opposite theme chosen in the header and the donut focused; zero serious or critical violations | **Verified (local)** | `e2e/tests/accessibility.spec.ts` |
-| Responsive: no horizontal scrolling on the dashboard and main pages at 390, 768, 1,024 and 1,280 px; every headline card inside the viewport | **Verified (local)** | `accessibility.spec.ts` (3 new width tests; the 390 px test already covered the dashboard) |
-| Colour checks: chart palettes validated with the dataviz validator in both themes; every new graphic pairing at least 3:1 and text at least 4.5:1 (computed) | **Verified (local)** | see *Colour checks* below |
+| Five headline figures from the analytics response, each labelled "Selected dates" or "Right now", with fixed accents and decorative icons | **Verified** | `frontend/src/pages/DashboardPage.test.tsx`; `e2e/tests/dashboard.spec.ts` (every figure compared with the response the page received) |
+| Status donut: legend with exact counts and shares, empty statuses kept in the legend and left out of the ring, keyboard reading with wrap-around, summary label | **Verified** | `DashboardPage.test.tsx`; `dashboard.spec.ts` |
+| Severity bars coloured by severity with named rows; SLA panel with on-time rates, overdue counts and staff-only escalations | **Verified** | `DashboardPage.test.tsx`, `IncidentListSla.test.tsx`; `dashboard.spec.ts` |
+| Role-specific figures: a reporter sees only their own incidents and never escalations | **Verified** | `DashboardPage.test.tsx`; `dashboard.spec.ts` |
+| Presets, custom range validation, URL persistence, trend keyboard readout and table view unchanged | **Verified** | existing unit and end-to-end tests, unchanged and passing |
+| Theme: follows the operating system until chosen; keyboard-operable toggle with state; choice stored per browser, restored before the first render, overriding the operating system both ways; unknown stored values ignored; works without storage or `matchMedia` | **Verified** | `frontend/src/theme.test.tsx` (5 tests); `e2e/tests/theme.spec.ts` (2 tests, computed page colours) |
+| Accessibility: axe WCAG 2.1 A/AA scans of every page in both operating-system themes, plus the dashboard with the opposite theme chosen in the header and the donut focused; zero serious or critical violations | **Verified** | `e2e/tests/accessibility.spec.ts` |
+| Responsive: no horizontal scrolling on the dashboard and main pages at 390, 768, 1,024 and 1,280 px; every headline card inside the viewport | **Verified** | `accessibility.spec.ts` (3 new width tests; the 390 px test already covered the dashboard) |
+| Colour checks: chart palettes validated with the dataviz validator in both themes; every new graphic pairing at least 3:1 and text at least 4.5:1 (computed) | **Verified** | see *Colour checks* below |
 
-**Results (local, 2026-11-16):** frontend **168 passed** (158 before; 10 new), type check and production build clean; backend **509 passed** (unchanged; no backend changes); end to end **69 tests** (61 before; 8 new): **three consecutive runs, 69/69 each**, on freshly built disposable stacks, with `sla-verify` consistent before and after. The Docker volume list matched the baseline before and after (an interrupted earlier run had left `imp-e2e_postgres_data`, which the runner removed after confirming it belonged to the end-to-end project).
+**Results (local, 2026-11-16; confirmed by CI on `e3bc126`):** frontend **168 passed** (158 before; 10 new), type check and production build clean; backend **509 passed** (unchanged; no backend changes); end to end **69 tests** (61 before; 8 new): **three consecutive runs, 69/69 each**, on freshly built disposable stacks, with `sla-verify` consistent before and after. The Docker volume list matched the baseline before and after (an interrupted earlier run had left `imp-e2e_postgres_data`, which the runner removed after confirming it belonged to the end-to-end project).
 
 **Colour checks:** the status badge tones failed as a chart palette (blue and purple ΔE 2.0 for deuteranopia; grey below the chroma floor), so the donut uses reference-palette slots. Light-mode aqua and yellow were 2.82:1 and 2.17:1 on white; the palette's documented deeper steps (`#199e70`, `#c98500`) pass every check in both themes (worst neighbouring ΔE 8.4, contrast at least 3:1). Accents, icons on their tints, severity bars on cards and tracks: at least 4.57:1 in dark and at least 3:1 in light.
 
@@ -755,7 +757,7 @@ Milestones are delivered in order, each as a small, separately approved change w
 | 5A | Incident comments and internal-only responder notes | **Complete** (`ddc571e`) |
 | 5B | SLA tracking, response/resolution deadlines, overdue indicators and escalation | **Complete** (`d0ea3e8`) |
 | 5C | AI-assisted incident triage with human approval | **Complete** (`4a216d7`) |
-| 5D | Dashboard UI/UX redesign with a light/dark theme toggle | Implemented locally, awaiting review (not released) |
+| 5D | Dashboard UI/UX redesign with a light/dark theme toggle | **Complete** (`e3bc126`) |
 | 6 | Production hardening, observability, monitoring and deployment | Planned |
 | — | Final presentation: live demo, sample data, screenshots, architecture diagram, README, 60–90 s walkthrough | Planned |
 
@@ -874,16 +876,16 @@ Implemented as described in *AI triage design*; evidence under *Completed functi
 - [x] Timeouts, rate limits and a cost ceiling; failures degrade gracefully to manual triage. *(CI run 43784327150 passed.)*
 - [x] Evaluation results recorded in this document; CI uses the fake model only (no secrets or paid calls in CI). *(Fake provider only; the paid Haiku evaluation awaits approval, ISSUE-24. CI run 43784327150 passed.)*
 
-### Milestone 5D — Dashboard UI/UX redesign · Implemented locally, awaiting review (not released)
+### Milestone 5D — Dashboard UI/UX redesign · Complete (`e3bc126`)
 
-A modern, accessible dashboard on the existing analytics API, and a light/dark theme toggle. Implemented as described in *Dashboard and theme design*; evidence under *Completed functionality* (Verified (local)).
+A modern, accessible dashboard on the existing analytics API, and a light/dark theme toggle. Implemented as described in *Dashboard and theme design*; evidence under *Completed functionality* (Verified).
 
 **Acceptance criteria**
-- [ ] Five headline figures from real data, labelled by date range or current state; reporters see their own incidents only.
-- [ ] Presets, custom range, URL persistence, trend chart and table unchanged.
-- [ ] Trend, status donut and severity bars with labels, keyboard access and text alternatives; SLA rates, overdue counts and staff-only escalations.
-- [ ] Validated colours and zero serious or critical axe violations in both themes; theme choice persisted per browser.
-- [ ] No horizontal scrolling at 390, 768, 1,024 and 1,280 px; no backend, API or dependency changes; all suites pass in CI.
+- [x] Five headline figures from real data, labelled by date range or current state; reporters see their own incidents only. *(CI run 43871416066 passed.)*
+- [x] Presets, custom range, URL persistence, trend chart and table unchanged. *(CI run 43871416066 passed.)*
+- [x] Trend, status donut and severity bars with labels, keyboard access and text alternatives; SLA rates, overdue counts and staff-only escalations. *(CI run 43871416066 passed.)*
+- [x] Validated colours and zero serious or critical axe violations in both themes; theme choice persisted per browser. *(CI run 43871416066 passed.)*
+- [x] No horizontal scrolling at 390, 768, 1,024 and 1,280 px; no backend, API or dependency changes; all suites pass in CI. *(CI run 43871416066 passed.)*
 
 ### Milestone 6 — Production hardening, observability, monitoring and deployment · Planned
 
