@@ -75,3 +75,44 @@ triage_settings = TriageSettings()
 
 
 settings = Settings()
+
+
+# ---- Deployment environment (Milestone 6) --------------------------------------------------
+# "production" turns off the interactive API docs and refuses to start with unsafe settings.
+APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
+# Passwords from the development defaults; never acceptable in production.
+_DEVELOPMENT_PASSWORDS = ("localdevonly", ":incident@", "ci-only-disposable")
+MIN_DATABASE_PASSWORD_LENGTH = 24  # generated, for example `openssl rand -hex 32`
+
+
+def production_problems(environ=os.environ) -> list[str]:
+    """Settings that must never reach a public deployment. Messages never include secret values."""
+    problems = []
+    if not _bool_from(environ, "SESSION_COOKIE_SECURE", True):
+        problems.append("SESSION_COOKIE_SECURE must be true (HTTPS only).")
+    database_url = environ.get("DATABASE_URL", "")
+    if not database_url:
+        problems.append("DATABASE_URL must be set.")
+    elif any(weak in database_url for weak in _DEVELOPMENT_PASSWORDS):
+        problems.append("DATABASE_URL uses a development password.")
+    else:
+        from sqlalchemy.engine import make_url
+
+        try:
+            password = make_url(database_url).password or ""
+        except Exception:
+            password = ""
+        if len(password) < MIN_DATABASE_PASSWORD_LENGTH:
+            problems.append(f"The database password must be at least {MIN_DATABASE_PASSWORD_LENGTH} characters.")
+    if environ.get("TRIAGE_PROVIDER", "off").strip().lower() == "anthropic":
+        problems.append("TRIAGE_PROVIDER=anthropic is not allowed in this deployment (use off or fake).")
+    if environ.get("ANTHROPIC_API_KEY"):
+        problems.append("ANTHROPIC_API_KEY must not be set in this deployment.")
+    if not environ.get("FORWARDED_ALLOW_IPS") or environ.get("FORWARDED_ALLOW_IPS", "").strip() == "*":
+        problems.append("FORWARDED_ALLOW_IPS must name the reverse proxy (not '*').")
+    return problems
+
+
+def _bool_from(environ, name: str, default: bool) -> bool:
+    value = environ.get(name)
+    return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}

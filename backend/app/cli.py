@@ -64,12 +64,21 @@ def create_admin(email: str, password: str, session_factory=None) -> User:
 def sla_escalate(loop: bool, interval: int) -> int:
     """No clock override exists here on purpose: production always uses the database clock."""
     from .escalation import run_escalations
+    from .health import readiness
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not 10 <= interval <= 3600:
         print("--interval must be between 10 and 3600 seconds.", file=sys.stderr)
         return 2
     while True:
+        # Never run against a schema this code was not written for (for example before migrations).
+        ready, reason = readiness()
+        if not ready:
+            print(f"SLA escalation run skipped: database not ready ({reason}).", file=sys.stderr, flush=True)
+            if not loop:
+                return 1
+            time.sleep(interval)
+            continue
         try:
             run = run_escalations()
             print(f"SLA escalation run: {'done' if run.ran else 'skipped (another worker is running)'}; "

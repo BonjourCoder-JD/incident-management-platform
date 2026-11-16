@@ -37,6 +37,10 @@ A two-page case study covering the architecture, security engineering, automated
 
 Setup, local test commands, the frontend guide and the API reference are in [README-foundation.md](README-foundation.md). Architecture, verified functionality, known issues and the remaining milestones are in [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md).
 
+## Production build (in progress)
+
+Milestone 6 prepares a public demo with synthetic data only; **nothing is deployed yet**. [`deploy/compose.prod.yaml`](deploy/compose.prod.yaml) runs PostgreSQL, a one-off migration step, the API and the SLA worker as non-root users, and Caddy, which serves the built React app over HTTPS with strict security headers and forwards `/api` to the backend. The backend reports `/health/ready` as 503 until the database schema matches the code, and refuses to start with unsafe production settings (for example a weak database password or a paid AI provider). Settings are listed in [`deploy/.env.production.example`](deploy/.env.production.example); the remaining work before going public is tracked in [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md).
+
 ## Continuous integration
 
 Every push and pull request to `main` runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):

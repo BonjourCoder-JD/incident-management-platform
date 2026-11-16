@@ -1,0 +1,45 @@
+# Public entry point (Milestone 6): HTTPS, security headers, the built React app, and /api -> backend.
+# SITE_ADDRESS is the public hostname (for example demo-name.duckdns.org); Caddy obtains and renews
+# its certificate automatically. "localhost" gives a locally trusted certificate for testing.
+{
+	# No admin API: the configuration only changes by redeploying the image.
+	admin off
+}
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	header {
+		# Same-origin app: scripts, styles, API calls and images only from this site. No inline
+		# scripts or styles (React sets style properties through the DOM, which CSP allows).
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		-Server
+	}
+
+	# The API, with the /api prefix removed (as the development proxy does). Caddy replaces any
+	# client-supplied X-Forwarded-For, and the backend trusts it only from this proxy.
+	handle_path /api/* {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy backend:8000
+	}
+
+	# The single-page app: hashed assets are cached for a year; everything else is revalidated.
+	handle {
+		root * /srv
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@pages not path /assets/*
+		header @pages Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}

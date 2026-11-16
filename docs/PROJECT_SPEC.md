@@ -148,6 +148,21 @@ Approved 2026-11-16 (plan with decisions: donut with an exact-count legend, a ma
 | Layout | Five cards in a row at 1,280 px; 3 + 2 at 1,024 px; 2 columns at 768 px and 390 px, with the fifth card full width. Trend beside the donut; severity and current backlog stacked beside the SLA panel; resolution times full width. Page container widened from 1,120 to 1,240 px so the header fits on one row. | No horizontal scrolling at 390, 768, 1,024 or 1,280 px (end-to-end checks). |
 | Light background | `#eef2f7` on every page in the light theme; muted text stays 5.3:1 on it. | Dark theme unchanged in its values, now also selectable explicitly. |
 
+### Production deployment design (Milestone 6)
+
+Approved 2026-11-16: a public portfolio demo on one Oracle Cloud Always Free ARM server (subject to capacity), Docker Compose, Caddy with a free DuckDNS hostname, synthetic data only, simulated AI triage (`TRIAGE_PROVIDER=fake`), no Pay As You Go upgrade. Delivered in phases A–G; **Phase A** (production images, reverse proxy, readiness) is implemented. Nothing is deployed yet.
+
+| Topic | Decision (Phase A) | Notes and limits |
+|---|---|---|
+| Stack | `deploy/compose.prod.yaml`: `db` (PostgreSQL 17, data volume, no published ports) → `migrate` (`alembic upgrade head`, must succeed) → `backend` and `worker` → `web` (Caddy, the only published ports). The development `compose.yaml` is unchanged. | Start-up order is enforced with health and completion conditions. |
+| Images | `backend/Dockerfile --target prod`: runtime dependencies only, installed from `backend/requirements-runtime.lock` (39 packages, hash-pinned, amd64 and arm64), user 10001, liveness health check. `deploy/web.Dockerfile`: the React build served by Caddy as user 10002. The default (development) backend image is unchanged in behaviour. | Verified on arm64 under emulation before Phase A: backend 510 tests, worker, identical frontend build. |
+| Reverse proxy | Caddy: automatic HTTPS for `SITE_ADDRESS`, HTTP→HTTPS redirect, `/api/*` to the backend with the prefix removed and a 1 MB body limit, single-page-app fallback, immutable caching for hashed assets and revalidation for pages, admin API off. | Same origin, so no CORS. |
+| Security headers | CSP `default-src 'self'` with no inline scripts or styles, `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'none'`; HSTS one year (this host only, because DuckDNS is a shared domain); nosniff; `X-Frame-Options: DENY`; `Referrer-Policy: no-referrer`; Permissions-Policy; COOP and CORP; no `Server` header. | Session cookies were already Secure, HttpOnly and SameSite=Strict. |
+| Client address | Caddy replaces any client-supplied `X-Forwarded-For`; uvicorn trusts forwarded addresses only from Caddy's fixed internal address (`FORWARDED_ALLOW_IPS`). | Real client addresses must be confirmed on the Linux server (Phase F). |
+| Readiness | `/health` liveness (no database); `/health/db` (shared engine; ISSUE-4 fixed); `/health/ready` returns 503 with `migrations_pending`, `unknown_database_revision` or `database_unavailable` unless the database revision equals the code's migration head. Revisions are logged, never published. The SLA worker skips its runs until ready. | Prevents a repeat of the local 0005-versus-0008 dashboard outage. |
+| Production settings | `APP_ENV=production` hides the API docs (`/docs`, `/redoc`, `/openapi.json`) and refuses to start when cookies are not Secure, `DATABASE_URL` is missing, uses a development password or a password under 24 characters, `TRIAGE_PROVIDER=anthropic` or any `ANTHROPIC_API_KEY` is set, or `FORWARDED_ALLOW_IPS` is empty or `*`. Messages never include secret values. | `POSTGRES_PASSWORD` and `SITE_ADDRESS` are required by the compose file; no defaults. |
+| Container hardening | Backend and worker: read-only root file system, all capabilities dropped, no new privileges. Web: only `NET_BIND_SERVICE`. | Base images still use version tags; digest pinning is Phase E. |
+
 ### CSV export design (Milestone 4)
 
 `GET /exports/incidents.csv?severity=&status=` (approved path; it avoids the dynamic `/incidents/{incident_id}` route).
@@ -337,6 +352,25 @@ Incident responses include `reporter_id`, `assignee_id`, and `reporter` / `assig
 ---
 
 ## Completed functionality
+
+### Milestone 6 Phase A — Production images, reverse proxy and readiness
+
+**Not yet released.** Implemented locally on 2026-11-16; every item below is **Verified (local)** until the feature commit passes CI. Nothing is deployed.
+
+| Functionality | Status | Evidence |
+|---|---|---|
+| Readiness: 200 at the migration head; 503 `migrations_pending` for an older or missing schema, `unknown_database_revision` for a newer one, `database_unavailable` when the database is down; no revisions in responses; `no-store` caching | **Verified (local)** | `backend/tests/test_health.py`; local production stack (below) |
+| Worker skips runs while the database is not ready | **Verified (local)** | `test_health.py`; local production stack log |
+| Production settings refused at start-up (insecure cookies, missing, development or short database password, paid AI provider or key, untrusted proxy setting) without revealing secrets; API docs hidden in production | **Verified (local)** | `test_health.py` (start-up tested in a separate process) |
+| Production images: non-root users, no test tools, hash-pinned dependencies, valid compose and Caddy configuration | **Verified (local)** | CI Docker images job (new steps); local checks |
+| HTTPS, redirect, security headers, caching, API routing, 1 MB body limit, no API docs, forwarded-address handling, read-only containers, no published database or backend ports | **Verified (local)** | local production stack (below) |
+| The application works unchanged behind Caddy with the production CSP and backend image | **Verified (local)** | full end-to-end suite against the production images (below) |
+
+**Results (local, 2026-11-16):** backend **530 passed** (510 before; 20 new) in the CI-equivalent sequence, migration round trip clean; frontend **168 passed**, build clean; end to end **69/69** on the development images and **69/69** against the production images (Caddy with the real CSP, production backend image, `APP_ENV=production`; scratch copy, with no browser console errors) with `sla-verify` consistent; `pip-audit` no known vulnerabilities (runtime lock and development requirements); actionlint clean. Docker volumes and the development database unchanged.
+
+**Local production stack** (project `imp-prodcheck`, `SITE_ADDRESS=localhost`, removed afterwards): start-up order held (database healthy, `migrate` exit 0, backend ready); HTTP 308 to HTTPS; every header above present; `/docs`, `/redoc`, `/openapi.json` 404; a 2 MB request 413. After `alembic downgrade -1`, `/api/health/ready` returned **503 `migrations_pending`** while `/api/health` stayed 200, the backend container became unhealthy and the worker logged "skipped: database not ready"; after upgrading, 200 again. A spoofed `X-Forwarded-For` through Caddy was replaced, and one sent directly to the backend from inside the network was ignored. Containers ran as users 10001 and 10002 with read-only file systems.
+
+**Remaining blockers before any public deployment:** least-privilege database role (ISSUE-12), shared login rate limiting with demo-account protection (ISSUE-7), incident text validation (BUG-2), comment redaction (ISSUE-18), per-IP write limits, session cleanup (ISSUE-9) — Phase B; demo accounts, synthetic data and the daily reset — Phase C; backups and monitoring — Phase D; scanning, image digests and the deploy workflow — Phase E; confirming real client addresses on the server — Phase F.
 
 ### Milestone 5D — Dashboard UI/UX redesign
 
@@ -714,8 +748,8 @@ The manual browser checks were one-off Playwright scripts, not part of the repos
 | BUG-2 | A NUL character (`\u0000` in JSON) in an incident `title` or `description` returns **HTTP 500**: PostgreSQL text cannot store NUL (`DataError` on create), and on update the audit diff also fails (`UntranslatableCharacter` in JSONB). Reproduced on `2ab695c` in a disposable environment on 2026-11-15 (create title, create description, update description). | An unhandled server error instead of a 422; nothing is stored. | Not fixed in Milestone 5A (scope). Proposed: reject NUL and other control characters in incident text with a 422, as comments already do, in a separately approved change. |
 | ~~ISSUE-2~~ | ~~No authentication or authorization.~~ | — | **Resolved in Milestone 1.** |
 | ISSUE-3 | `StarletteDeprecationWarning`: using `httpx` with `starlette.testclient` is deprecated in favour of `httpx2`. | Test warning only. | Milestone 6 dependency review. |
-| ISSUE-4 | `/health/db` creates a new engine per request and duplicates a fallback database URL. | Inefficient; hardcoded fallback credential string. | Milestone 6. |
-| ISSUE-5 | The frontend image runs the Vite dev server; containers run as root; migrations are not applied automatically on startup. | Not production-ready. | Milestone 6. |
+| ~~ISSUE-4~~ | ~~`/health/db` creates a new engine per request and duplicates a fallback database URL.~~ | — | **Fixed in Milestone 6 Phase A** (shared engine, no fallback URL). |
+| ISSUE-5 | The development stack runs the Vite dev server as root and does not apply migrations automatically. | Development only. | **Production stack fixed in Milestone 6 Phase A** (static build behind Caddy, non-root images, `migrate` service and readiness gate); the development stack is unchanged by design. |
 | ISSUE-6 | When the backend is down, the Vite proxy returns 500, so the UI says "server error" rather than "unreachable". | Minor wording. | Milestone 6 (production proxy). |
 | ISSUE-7 | The login rate limiter is in memory and per process, and behind the Vite proxy every browser shares the proxy's IP, so the per-IP limit is effectively global. | Limits reset on restart and are not shared across workers; many failures from anyone can briefly block all sign-ins. | Milestone 6: shared store (PostgreSQL or Redis) and trusted-proxy client IP handling. |
 | ISSUE-8 | No self-service password reset, and no forced password change after an admin sets a temporary password. | Admins must share temporary passwords out of band. | Future milestone (needs email delivery); forced first-login change could come in Milestone 6. |
@@ -758,7 +792,7 @@ Milestones are delivered in order, each as a small, separately approved change w
 | 5B | SLA tracking, response/resolution deadlines, overdue indicators and escalation | **Complete** (`d0ea3e8`) |
 | 5C | AI-assisted incident triage with human approval | **Complete** (`4a216d7`) |
 | 5D | Dashboard UI/UX redesign with a light/dark theme toggle | **Complete** (`e3bc126`) |
-| 6 | Production hardening, observability, monitoring and deployment | Planned |
+| 6 | Production hardening, observability, monitoring and deployment | In progress: Phase A implemented (production images, reverse proxy, readiness) |
 | — | Final presentation: live demo, sample data, screenshots, architecture diagram, README, 60–90 s walkthrough | Planned |
 
 Technical additions listed under planned milestones are **anticipated designs, not implemented features**. Each is refined, and may change, in that milestone's approved plan.
@@ -887,7 +921,7 @@ A modern, accessible dashboard on the existing analytics API, and a light/dark t
 - [x] Validated colours and zero serious or critical axe violations in both themes; theme choice persisted per browser. *(CI run 43871416066 passed.)*
 - [x] No horizontal scrolling at 390, 768, 1,024 and 1,280 px; no backend, API or dependency changes; all suites pass in CI. *(CI run 43871416066 passed.)*
 
-### Milestone 6 — Production hardening, observability, monitoring and deployment · Planned
+### Milestone 6 — Production hardening, observability, monitoring and deployment · In progress (Phase A implemented)
 
 The original hardening and deployment criteria below are unchanged; observability and monitoring are added. README improvements, screenshots and the architecture diagram move to the *Final presentation*.
 

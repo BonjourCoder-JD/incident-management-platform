@@ -1,0 +1,122 @@
+# Production stack for one server (Milestone 6). Separate from the development compose.yaml.
+#
+#   docker compose -f deploy/compose.prod.yaml --env-file deploy/.env.production up -d --build
+#
+# Start-up order: db (healthy) -> migrate (alembic upgrade head, must succeed) -> backend (ready:
+# schema matches the code) and worker -> web (Caddy). A failed migration stops the deploy, and the
+# backend reports 503 on /health/ready whenever the schema and the code disagree.
+name: imp-prod
+
+x-backend: &backend
+  image: ${BACKEND_IMAGE:-imp-backend:prod}
+  build:
+    context: ../backend
+    target: prod
+  environment: &backend-env
+    APP_ENV: production
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-incident}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-incidents}
+    SESSION_COOKIE_SECURE: "true"
+    # Only the reverse proxy may supply the client address (fixed address on the internal network).
+    FORWARDED_ALLOW_IPS: 172.30.0.10
+    # Simulated AI only; the paid provider is refused at start-up in production.
+    TRIAGE_PROVIDER: ${TRIAGE_PROVIDER:-fake}
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  networks:
+    - internal
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-incident}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-incidents}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - internal
+
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    healthcheck:
+      disable: true
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    <<: *backend
+    restart: unless-stopped
+    healthcheck:
+      # Ready only when the database answers and its schema matches this code.
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.cli", "sla-escalate", "--loop", "--interval", "60"]
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    image: ${WEB_IMAGE:-imp-web:prod}
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      internal:
+        ipv4_address: 172.30.0.10
+
+networks:
+  internal:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
