@@ -1,58 +1,68 @@
-# incident-management-platform
-
-[![CI](https://github.com/BonjourCoder-JD/incident-management-platform/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BonjourCoder-JD/incident-management-platform/actions/workflows/ci.yml)
+# Incident Management Platform
 
 Full-stack incident management application built with React, TypeScript, FastAPI, and PostgreSQL.
 
-
 ## Engineering Case Study
 
-[View Engineering Case Study (PDF)](docs/Case_Study.pdf)
+- **[View Engineering Case Study (PDF)](https://github.com/BonjourCoder-JD/incident-management-platform/blob/main/docs/Case_Study.pdf)** — A two-page case study covering architecture, security engineering, automated testing, engineering challenges (including an SLA performance investigation on a 50,000-incident benchmark), and the planned final dashboard.
+- *Note:* The dashboard image is a design concept, not a screenshot of the current application; planned features are clearly separated from completed work.
 
-A two-page case study covering the architecture, security engineering, automated testing, engineering challenges (including an SLA performance investigation on a 50,000-incident benchmark), and the planned final dashboard. The dashboard image is a design concept, not a screenshot of the current application; planned features are identified separately from completed work.
+## Quick Start (Local)
+
+```bash
+docker compose up --build
+```
+
+For full setup instructions, local test commands, the frontend guide, and API reference, see [`README-foundation.md`](README-foundation.md). Architecture, verified functionality, known issues, and remaining milestones are tracked in [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md).
 
 ## Stack
 
 - **Frontend:** React 19, TypeScript (strict), Vite
 - **Backend:** FastAPI, SQLAlchemy 2, Alembic migrations
 - **Database:** PostgreSQL 17
-- **Tooling:** Docker Compose for local development, pytest, Vitest + React Testing Library, GitHub Actions
+- **Tooling:** Docker Compose for local development, `pytest`, Vitest + React Testing Library, GitHub Actions
 
 ## Features
 
-- Sign-in with server-side sessions (HttpOnly cookie, CSRF protection, Argon2id passwords, login rate limiting)
-- Role-based access control enforced by the API: reporters see and edit only their own incidents; responders triage everything; admins also manage users and roles
-- Incident list with severity and status filters and pagination
-- Report-an-incident form with validation and clear error messages
-- Incident detail view with one-click status changes, assignment and editing
-- Secure CSV export: role-scoped, streamed, formula-injection safe, size-limited, and recorded in an append-only log
-- Analytics dashboard computed in PostgreSQL: five headline figures labelled by date range or current state, a created-versus-resolved trend, a status donut, severity bars, SLA compliance and escalations, current backlog and time to first resolution, scoped to what each role may see, with keyboard-readable charts and table alternatives
-- Tamper-resistant audit trail: every change recorded with who, when and before/after values, in the same transaction, shown as a readable history
-- Incident discussion: public comments between the reporter and responders, plus internal notes that only responders and admins can read, enforced by the API; comments are append-only and shown as plain text; administrators can remove a comment's text, with the removal and its reason recorded
-- SLA tracking: response and resolution targets per severity, deadlines and overdue states on every incident and in the list, dashboard compliance figures, automatic escalation by a background worker, and admin-only policy versions with history
-- Optional AI-assisted triage (off by default): a suggested severity, rationale, next steps and possible duplicates that a responder reviews, edits and accepts or rejects; nothing changes without a person, every decision is audited, and spending is capped in the database. Tests and CI use an offline test provider only
-- User management for admins and self-service password changes
-- Light and dark themes that follow the operating system until you choose one in the header (remembered in that browser)
-- Loading, empty, error, forbidden and success states throughout, and a responsive layout down to phone width
+- **Authentication & Sessions:** Server-side sessions with `HttpOnly` cookies, CSRF protection, Argon2id password hashing, and login rate limiting.
+- **Role-Based Access Control (RBAC):** API-enforced roles—reporters view and edit only their own incidents; responders triage incidents; admins also manage users and roles.
+- **Incident Workflows:** Filterable and paginated incident list (by severity and status), validated incident reporting form with clear errors, and a detail view supporting one-click status updates, assignment, and editing.
+- **Secure CSV Export:** Role-scoped, streamed, formula-injection-safe, and size-limited exports recorded in an append-only log.
+- **PostgreSQL Analytics Dashboard:** Five headline figures scoped by date range or current state, created-versus-resolved trends, status donut, severity bars, SLA compliance and escalations, current backlog, and time to first resolution—scoped to role permissions with keyboard-readable charts and table alternatives.
+- **Tamper-Resistant Audit Trail:** Every change is recorded with actor, timestamp, and before/after values inside the same transaction, displayed as a readable history.
+- **Incident Discussion:** Public comments between reporters and responders plus responder/admin-only internal notes enforced by the API; comments are append-only plain text, and admins can redact comment text while recording the removal and reason.
+- **SLA Tracking:** Per-severity response and resolution targets, deadlines and overdue indicators in lists and details, dashboard compliance metrics, automatic background-worker escalation, and versioned admin-only SLA policies with history.
+- **Optional AI-Assisted Triage (Off by Default):** Suggests severity, rationale, next steps, and potential duplicates for a responder to review, edit, and accept or reject—requiring human confirmation, auditing every decision, capping spend in PostgreSQL, and using an offline test provider in tests and CI.
+- **Administration & UX:** Admin user management, self-service password changes, OS-synced light/dark themes with browser override persistence, loading/empty/error/forbidden/success states, and responsive layout down to mobile widths.
 
-Setup, local test commands, the frontend guide and the API reference are in [README-foundation.md](README-foundation.md). Architecture, verified functionality, known issues and the remaining milestones are in [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md).
+## Production Build (In Progress)
 
-## Production build (in progress)
+Milestone 6 prepares a synthetic-data-only public demo (not yet deployed):
 
-Milestone 6 prepares a public demo with synthetic data only; **nothing is deployed yet**. [`deploy/compose.prod.yaml`](deploy/compose.prod.yaml) runs PostgreSQL, a one-off migration step, the API and the SLA worker as non-root users, and Caddy, which serves the built React app over HTTPS with strict security headers and forwards `/api` to the backend. The backend reports `/health/ready` as 503 until the database schema matches the code, and refuses to start with unsafe production settings (for example a weak database password or a paid AI provider). In production the API and worker connect as a least-privilege database role that can read and add audit records but never change, remove or unprotect them; sign-in failures and public-demo writes are rate limited in PostgreSQL (shared by every process and kept across restarts); and administrators can remove a comment's text with a recorded reason. With `DEMO_MODE=true` it becomes a public demo: the sign-in page publishes a reporter and a responder account (the administrator stays private), a banner explains that all data is synthetic and AI triage is simulated, the demo accounts cannot be locked out by email or changed, and a reset service recreates the same synthetic scenarios every day at 04:00 UTC, refusing any database whose name does not end in `_demo`. For operations, every service logs JSON lines with request IDs (no passwords, tokens or incident text), `docker compose ps` shows the health of the API, worker, demo reset and backups, and a backup service dumps the database daily; restores go only into a new database, are verified before use, and are documented step by step in [docs/OPERATIONS.md](docs/OPERATIONS.md). Settings are listed in [`deploy/.env.production.example`](deploy/.env.production.example); the remaining work before going public is tracked in [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md).
+- **Hardened Containers & Routing:** `deploy/compose.prod.yaml` runs PostgreSQL, a one-off migration step, the API, and the SLA worker as non-root users, paired with Caddy serving the built React app over HTTPS with strict security headers and proxying `/api` to the backend.
+- **Fail-Safe Startup & Least Privilege:** `/health/ready` returns `503` until the schema matches the code, and startup rejects unsafe production settings (such as weak database passwords or a paid AI provider). In production, the API and worker use a least-privilege database role that can read and insert audit records without modifying, deleting, or unprotecting them.
+- **Rate Limiting & Moderation:** Sign-in failures and public-demo writes are rate-limited in PostgreSQL across processes and restarts, and admins can redact comment text with a recorded reason.
+- **Demo Mode (`DEMO_MODE=true`):** Publishes reporter and responder demo accounts (keeping the admin account private), displays a synthetic-data and simulated-AI banner, protects demo accounts from email lockout or mutation, and runs a daily `04:00 UTC` reset service that refuses any database whose name does not end in `_demo`.
+- **Observability & Backups:** Services emit structured JSON logs with request IDs (excluding passwords, tokens, and incident text); `docker compose ps` reports health across API, worker, demo reset, and backups; daily database dumps back up data, with verified restores into new databases documented in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
-## Continuous integration
+Configuration templates live in `deploy/.env.production.example`, and remaining pre-launch items are tracked in [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md).
 
-Every push and pull request to `main` runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+## Continuous Integration
 
-| Job | What it checks |
+Every push and pull request to `main` runs `.github/workflows/ci.yml`:
+
+| Job | What It Checks |
 |---|---|
-| Backend tests | Applies migrations to a disposable PostgreSQL database, checks models match migrations (`alembic check`), runs the pytest suite |
-| Migration round trip | On a separate disposable database: upgrade, downgrade to base (confirming tables and enum types are removed), upgrade again, then run the admin bootstrap command |
-| Frontend tests and build | `npm ci` from the lockfile, Vitest + React Testing Library tests, TypeScript type check and Vite production build |
-| Docker images | Builds the backend and frontend images |
-| End-to-end tests | Playwright (Chromium) against a disposable Docker Compose stack with random per-run passwords: sign-in and sessions, authorization and cross-reporter isolation, incidents, history, dashboard, CSV export, triage with the offline test provider and axe accessibility checks; then a public-demo run against the production images (`run.sh --demo`). Failure evidence is limited to screenshots, page snapshots and backend logs |
+| **Backend tests** | Applies migrations to a disposable PostgreSQL instance, verifies models match migrations (`alembic check`), and runs `pytest`. |
+| **Migration round trip** | On a separate disposable database: runs `upgrade` → `downgrade` to base (confirming tables and enum types are removed) → `upgrade` again, then runs the admin bootstrap command. |
+| **Frontend tests and build** | Runs `npm ci` from the lockfile, Vitest + React Testing Library tests, TypeScript type checking, and the Vite production build. |
+| **Docker images** | Builds the backend and frontend container images. |
+| **End-to-end tests** | Runs Playwright (Chromium) against a disposable Docker Compose stack with random per-run passwords (auth/sessions, RBAC and cross-reporter isolation, incidents, history, dashboard, CSV export, offline-provider triage, and `axe` accessibility checks), followed by a public-demo run against production images (`run.sh --demo`). Failure artifacts are limited to screenshots, page snapshots, and backend logs. |
 
-Three more workflows support releases (Milestone 6 Phase E): [*Security scans*](.github/workflows/security.yml) (`pip-audit`, `npm audit` and Trivy on every change and weekly), [*Release images*](.github/workflows/release.yml) (after CI passes on `main`: native linux/arm64 images, scanned, deployed and smoke-tested on the runner, then published to GitHub Container Registry) and [*Deploy*](.github/workflows/deploy.yml) (manual, approved in the `production` environment; see [docs/OPERATIONS.md](docs/OPERATIONS.md)). Base images and actions are pinned by digest and commit SHA.
+Additional workflows in Milestone 6 Phase E cover:
 
-CI never connects to a development database and uses no repository secrets. The database password in the workflow is a throwaway value for the job's temporary container. The workflow token is read-only (`contents: read`).
+- **Security scans:** `pip-audit`, `npm audit`, and Trivy on every change and weekly.
+- **Release images:** Built as native `linux/arm64` images after `main` CI passes, scanned, smoke-tested on the runner, and published to GitHub Container Registry.
+- **Deploy:** Manual, environment-approved production deployment documented in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+Base images and GitHub Actions are pinned by digest and commit SHA. CI never connects to a development database, uses no repository secrets, uses a throwaway database password for temporary containers, and uses only the standard workflow permissions required by each job.
