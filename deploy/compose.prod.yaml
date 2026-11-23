@@ -58,7 +58,7 @@ x-backend: &backend
 services:
   db:
     # Pinned by digest (amd64 and arm64); see docs/OPERATIONS.md, Updating base images.
-    image: postgres:17-alpine@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
+    image: postgres:19-alpine@sha256:8b0ff4cdf221f0c53d7fcda681d3b461be725c492cd881c5ec9c0ad25023f188
     # The image's own postgres user (uid 70; it owns the data and socket directories), so the entrypoint
     # never runs as root and never executes gosu (.trivyignore.yaml); no Linux capabilities are needed.
     user: postgres
